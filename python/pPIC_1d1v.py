@@ -178,6 +178,7 @@ class my_timers:
          'build b':0.0,
          'gmres':0.0,
          'mover':0.0,
+         'lorentz':0.0,
          'total':0.0
          }
 
@@ -385,6 +386,17 @@ class Pop:
       
       self.apply_boundaries()
 
+   def Lorentz(self, midNodeE):
+      # Accelerate particles via Lorentz force
+      rE = node2r(midNodeE,self.r)
+      
+      beta = (self.q*dt)/(2*self.m)
+      
+      for ii,(r,v,alpha,E) in enumerate(zip(self.r,self.v,self.alpha,rE)):
+         new_v = 2*alpha@(v + beta*E) - v
+         
+         self.v[ii] = new_v
+      
    def nodeU(self):
       # Computes bulk velocity at nodes
       nodeU = np.zeros(dim_vector)
@@ -901,6 +913,9 @@ def face2r(face_data,r):
 
    r_data[:,2] += z_w0*zface_data[z_locs,y_locs,x_locs]
    r_data[:,2] += z_w1*zface_data[z_locs_r,y_locs,x_locs]
+
+   if r.shape[0] == 1:
+      r_data = r_data.reshape(3)
    
    return r_data
 
@@ -982,6 +997,9 @@ def node2r(node_data,r):
    r_data += weights[6]*node_data[z_locs, y_locs_r, x_locs_r,...]
    r_data += weights[7]*node_data[z_locs_r, y_locs_r, x_locs_r,...]
 
+   if r.shape[0] == 1:
+      r_data = r_data.reshape(3)
+   
    return r_data
 
 def cell2r(cell_data,r):
@@ -1076,6 +1094,9 @@ def cell2r(cell_data,r):
    r_data += weights[5]*cell_data[z_locs, y_locs_l, x_locs,...]
    r_data += weights[6]*cell_data[z_locs_l, y_locs, x_locs,...]
    r_data += weights[7]*cell_data[z_locs, y_locs, x_locs,...]
+
+   if r.shape[0] == 1:
+      r_data = r_data.reshape(3)
    
    return r_data
 
@@ -1326,6 +1347,9 @@ for pop in pops.values():
    print("Uncentering particles of population " + pop.name)
    pop.moveParticles(-dt/2)
 
+tmp_r = pops["e-"].r.copy()
+tmp_v = pops["e-"].v.copy()
+   
 timers.toc("init")
 
 for jj in range(args.steps):
@@ -1387,13 +1411,13 @@ for jj in range(args.steps):
       x0 = np.concatenate((faceB[:,:,:,0].flat,nodeE[:,:,:,0].flat))
    else:
       x0 = np.concatenate((faceB.flat,nodeE.flat))
-   breakpoint()
+   
    while info > 0 and rtol < 1e-2 and atol < 1e-2:
       xnext,info = gmres(A, b, rtol = rtol, atol = atol, x0 = x0)
       if info > 0:
          rtol *= 10
          atol *= 10
-   breakpoint()
+   
    if info < 0:
       sys.stderr.write("Illegal input in timestep " + str(jj) + "\n")
       sys.exit(1)
@@ -1408,8 +1432,20 @@ for jj in range(args.steps):
    if oneV:
       newFaceB[:,:,:,0] = xnext[:Ncells_total].reshape(dim_scalar)
       newNodeE[:,:,:,0] = xnext[Ncells_total:].reshape(dim_scalar)
-   breakpoint()
+   
+   midNodeE = theta*newNodeE + (1-theta)*nodeE
+
+   nodeE = newNodeE
+   faceB = newFaceB
+   
    timers.toc("maxwell")
+
+   timers.tic("lorentz")
+
+   for pop in pops.values():
+      pop.Lorentz(midNodeE)
+
+   timers.toc("lorentz")
 
 timers.toc("total")
    
@@ -1423,5 +1459,6 @@ print("Maxwell:              " + str(timers.timers["maxwell"]))
 print("   build A:           " + str(timers.timers["build A"]))
 print("   build b:           " + str(timers.timers["build b"]))
 print("   gmres:             " + str(timers.timers["gmres"]))
+print("Lorentz Force update: " + str(timers.timers["lorentz"]))
    
 breakpoint()
