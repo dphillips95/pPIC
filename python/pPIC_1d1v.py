@@ -3,6 +3,7 @@ import math
 import numpy as np
 import scipy as sp
 import scipy.constants as const
+from timeit import default_timer as timer
 import configparser
 import argparse
 
@@ -132,6 +133,26 @@ def readConfig(fName, args):
       args.dt = float(args.dt)
    
    return args,config
+
+class my_timers:
+   def __init__(self):
+      self.timers = {
+         'init':0.0,
+         'alpha':0.0,
+         'current':0.0,
+         'mass matrices':0.0,
+         'mover':0.0,
+         'total':0.0
+         }
+
+   def tic(self, _timer_):
+      self.timers[_timer_] -= timer()
+   
+   def toc(self, _timer_):
+      self.timers[_timer_] += timer()
+   
+   def reset(self, _timer_):
+      self.timers[_timer_] = 0.0
 
 class Pop:
    def __init__(self, name, q, m, w, electron, Np, T = None, v = None):
@@ -303,7 +324,9 @@ class Pop:
       bx,by,bz = split_axis(rB*beta, axis = 1)
       
       if oneV is True:
-         self.alpha = 1
+         self.alpha = np.zeros((self.Np,3,3))
+         
+         self.alpha[:,0,0] = 1
       else:
          factor = 1/(1 + bx**2 + by**2 + bz**2)
          
@@ -326,56 +349,120 @@ class Pop:
       
       self.apply_boundaries()
 
+   # def compute_rotated_current(self):
+   #    # Computes current due to B-rotation
+   #    # Current is stored at nodes to match E
+   #    # This requires an interpolation after accumulating to cells
+   #    cellJ = np.zeros(dim_vector)
+   #    
+   #    for r,v,alpha in zip(self.r,self.v,self.alpha):
+   #       x_locs = np.round((r[0] - x_min)/dx).astype(int)
+   #       y_locs = np.round((r[1] - y_min)/dy).astype(int)
+   #       z_locs = np.round((r[2] - z_min)/dz).astype(int)
+   #       
+   #       if x_periodic:
+   #          x_locs = np.mod(x_locs, x_size)
+   #       if y_periodic:
+   #          y_locs = np.mod(y_locs, y_size)
+   #       if z_periodic:
+   #          z_locs = np.mod(z_locs, z_size)
+   #       
+   #       x0 = (x_locs - 1 + 0.5)*dx + x_min
+   #       y0 = (y_locs - 1 + 0.5)*dy + y_min
+   #       z0 = (z_locs - 1 + 0.5)*dz + z_min
+   #       
+   #       x_w1 = (r[0] - x0)/dx
+   #       y_w1 = (r[1] - y0)/dy
+   #       z_w1 = (r[2] - z0)/dz
+   #       
+   #       if x_periodic:
+   #          x_w1 = np.mod(x_w1, 1)
+   #       if y_periodic:
+   #          y_w1 = np.mod(y_w1, 1)
+   #       if z_periodic:
+   #          z_w1 = np.mod(z_w1, 1)
+   #       
+   #       x_w0 = 1 - x_w1
+   #       y_w0 = 1 - y_w1
+   #       z_w0 = 1 - z_w1
+   #       
+   #       x_ind0 = arr_shift(range(x_size), 1, 0, (x_periodic,))[x_locs]
+   #       x_ind1 = x_locs
+   #       y_ind0 = arr_shift(range(y_size), 1, 0, (y_periodic,))[y_locs]
+   #       y_ind1 = y_locs
+   #       z_ind0 = arr_shift(range(z_size), 1, 0, (z_periodic,))[z_locs]
+   #       z_ind1 = z_locs
+   #       
+   #       if oneV is True:
+   #          alpha_v = alpha@v
+   #          
+   #          # (cell-centred) current density
+   #          cellJ[z_ind0,y_ind0,x_ind0,:] += x_w0*alpha_v
+   #          cellJ[z_ind0,y_ind0,x_ind1,:] += x_w1*alpha_v
+   #       else:
+   #          w_lll = x_w0 * y_w0 * z_w0
+   #          w_rll = x_w1 * y_w0 * z_w0
+   #          w_lrl = x_w0 * y_w1 * z_w0
+   #          w_llr = x_w0 * y_w0 * z_w1
+   #          w_rrl = x_w1 * y_w1 * z_w0
+   #          w_rlr = x_w1 * y_w0 * z_w1
+   #          w_lrr = x_w0 * y_w1 * z_w1
+   #          w_rrr = x_w1 * y_w1 * z_w1
+   #          
+   #          alpha_v = alpha@v
+   #          
+   #          # (cell-centred) current density
+   #          cellJ[z_ind0,y_ind0,x_ind0,:] += w_lll*alpha_v
+   #          cellJ[z_ind1,y_ind0,x_ind0,:] += w_rll*alpha_v
+   #          cellJ[z_ind0,y_ind1,x_ind0,:] += w_lrl*alpha_v
+   #          cellJ[z_ind0,y_ind0,x_ind1,:] += w_llr*alpha_v
+   #          cellJ[z_ind1,y_ind1,x_ind0,:] += w_rrl*alpha_v
+   #          cellJ[z_ind1,y_ind0,x_ind1,:] += w_rlr*alpha_v
+   #          cellJ[z_ind0,y_ind1,x_ind1,:] += w_lrr*alpha_v
+   #          cellJ[z_ind1,y_ind1,x_ind1,:] += w_rrr*alpha_v
+   #          
+   #    cellJ *= self.q*self.w/vol
+   #    
+   #    nodeJ = cell2node(cellJ)
+   #    
+   #    return nodeJ
+
    def compute_rotated_current(self):
       # Computes current due to B-rotation
       # Current is stored at nodes to match E
-      # This requires an interpolation after accumulating to cells
-      cellJ = np.zeros(dim_vector)
+      # This is accumulated directly to the nodes
+      nodeJ = np.zeros(dim_vector)
       
       for r,v,alpha in zip(self.r,self.v,self.alpha):
-         x_locs = np.round((r[0] - x_min)/dx).astype(int)
-         y_locs = np.round((r[1] - y_min)/dy).astype(int)
-         z_locs = np.round((r[2] - z_min)/dz).astype(int)
+         x_locs = np.floor((r[0] - x_min)/dx).astype(int)
+         y_locs = np.floor((r[1] - y_min)/dy).astype(int)
+         z_locs = np.floor((r[2] - z_min)/dz).astype(int)
          
-         if x_periodic:
-            x_locs = np.mod(x_locs, x_size)
-         if y_periodic:
-            y_locs = np.mod(y_locs, y_size)
-         if z_periodic:
-            z_locs = np.mod(z_locs, z_size)
+         x0 = x_locs*dx + x_min
+         y0 = y_locs*dy + y_min
+         z0 = z_locs*dz + z_min
          
-         x0 = (x_locs - 1 + 0.5)*dx + x_min
-         y0 = (y_locs - 1 + 0.5)*dy + y_min
-         z0 = (z_locs - 1 + 0.5)*dz + z_min
-
          x_w1 = (r[0] - x0)/dx
          y_w1 = (r[1] - y0)/dy
          z_w1 = (r[2] - z0)/dz
-
-         if x_periodic:
-            x_w1 = np.mod(x_w1, 1)
-         if y_periodic:
-            y_w1 = np.mod(y_w1, 1)
-         if z_periodic:
-            z_w1 = np.mod(z_w1, 1)
-
+         
          x_w0 = 1 - x_w1
          y_w0 = 1 - y_w1
          z_w0 = 1 - z_w1
-
-         x_ind0 = arr_shift(range(x_size), 1, 0, (x_periodic,))[x_locs]
-         x_ind1 = x_locs
-         y_ind0 = arr_shift(range(y_size), 1, 0, (y_periodic,))[y_locs]
-         y_ind1 = y_locs
-         z_ind0 = arr_shift(range(z_size), 1, 0, (z_periodic,))[z_locs]
-         z_ind1 = z_locs
+         
+         x_ind0 = x_locs
+         x_ind1 = arr_shift(range(x_size), -1, 0, (x_periodic,))[x_locs]
+         y_ind0 = y_locs
+         y_ind1 = arr_shift(range(y_size), -1, 0, (y_periodic,))[y_locs]
+         z_ind0 = z_locs
+         z_ind1 = arr_shift(range(z_size), -1, 0, (z_periodic,))[z_locs]
          
          if oneV is True:
-            alpha_v = alpha*v
+            alpha_v = alpha@v
 
             # (cell-centred) current density
-            cellJ[z_ind0,y_ind0,x_ind0,:] += x_w0*alpha_v
-            cellJ[z_ind0,y_ind0,x_ind1,:] += x_w1*alpha_v
+            nodeJ[z_ind0,y_ind0,x_ind0,:] += x_w0*alpha_v
+            nodeJ[z_ind0,y_ind0,x_ind1,:] += x_w1*alpha_v
          else:
             w_lll = x_w0 * y_w0 * z_w0
             w_rll = x_w1 * y_w0 * z_w0
@@ -389,21 +476,72 @@ class Pop:
             alpha_v = alpha@v
             
             # (cell-centred) current density
-            cellJ[z_ind0,y_ind0,x_ind0,:] += w_lll*alpha_v
-            cellJ[z_ind1,y_ind0,x_ind0,:] += w_rll*alpha_v
-            cellJ[z_ind0,y_ind1,x_ind0,:] += w_lrl*alpha_v
-            cellJ[z_ind0,y_ind0,x_ind1,:] += w_llr*alpha_v
-            cellJ[z_ind1,y_ind1,x_ind0,:] += w_rrl*alpha_v
-            cellJ[z_ind1,y_ind0,x_ind1,:] += w_rlr*alpha_v
-            cellJ[z_ind0,y_ind1,x_ind1,:] += w_lrr*alpha_v
-            cellJ[z_ind1,y_ind1,x_ind1,:] += w_rrr*alpha_v
+            nodeJ[z_ind0,y_ind0,x_ind0,:] += w_lll*alpha_v
+            nodeJ[z_ind1,y_ind0,x_ind0,:] += w_rll*alpha_v
+            nodeJ[z_ind0,y_ind1,x_ind0,:] += w_lrl*alpha_v
+            nodeJ[z_ind0,y_ind0,x_ind1,:] += w_llr*alpha_v
+            nodeJ[z_ind1,y_ind1,x_ind0,:] += w_rrl*alpha_v
+            nodeJ[z_ind1,y_ind0,x_ind1,:] += w_rlr*alpha_v
+            nodeJ[z_ind0,y_ind1,x_ind1,:] += w_lrr*alpha_v
+            nodeJ[z_ind1,y_ind1,x_ind1,:] += w_rrr*alpha_v
 
-      cellJ *= self.q*self.w/vol
-
-      nodeJ = cell2node(cellJ)
-      breakpoint()
-      return nodeJ
+      nodeJ *= self.q*self.w/vol
       
+      return nodeJ
+   
+   def compute_mass_matrices(self):
+      # Compute mass matrices
+      if oneV:
+         M = np.zeros((1,1,Ncells_total,Ncells_total))
+      else:
+         M = np.zeros((3,3,Ncells_total,Ncells_total))
+      
+      for r,alpha in zip(self.r,self.alpha):
+         x_locs = np.floor((r[0] - x_min)/dx).astype(int)
+         y_locs = np.floor((r[1] - y_min)/dy).astype(int)
+         z_locs = np.floor((r[2] - z_min)/dz).astype(int)
+
+         x0 = x_locs*dx + x_min
+         y0 = y_locs*dy + y_min
+         z0 = z_locs*dz + z_min
+         
+         x_w1 = (r[0] - x0)/dx
+         y_w1 = (r[1] - y0)/dy
+         z_w1 = (r[2] - z0)/dz
+         
+         x_w0 = 1 - x_w1
+         y_w0 = 1 - y_w1
+         z_w0 = 1 - z_w1
+         
+         x_ind = (x_locs,arr_shift(range(x_size), -1, 0, (x_periodic,))[x_locs])
+         y_ind = (y_locs,arr_shift(range(y_size), -1, 0, (y_periodic,))[y_locs])
+         z_ind = (z_locs,arr_shift(range(z_size), -1, 0, (z_periodic,))[z_locs])
+
+         x_w = (x_w0,x_w1)
+         y_w = (y_w0,y_w1)
+         z_w = (z_w0,z_w1)
+
+         if oneV is True:
+            for xi,x_wi in zip(x_ind,x_w):
+               for xj,x_wj in zip(x_ind,x_w):
+                  M[0,0,xi,xj] += x_wi*x_wj
+         else:
+            for xi,x_wi in zip(x_ind,x_w):
+               for xj,x_wj in zip(x_ind,x_w):
+                  for yi,y_wi in zip(y_ind,y_w):
+                     for yj,y_wj in zip(y_ind,y_w):
+                        for zi,z_wi in zip(z_ind,z_w):
+                           for zj,z_wj in zip(z_ind,z_w):
+                              for ii in range(3):
+                                 for jj in range(3):
+                                    M[ii,jj,(zi*y_size + yi)*x_size + xi,
+                                      (zj*y_size + yj)*x_size + xj] += x_wi*x_wj*y_wi*y_wj*z_wi*z_wj * alpha[ii,jj]
+      
+      beta = (self.q*dt)/(2*self.m)
+      M *= beta * self.q*self.w/vol
+                                    
+      return M
+
 def split_axis(arr, axis, keep_dim = False):
    # Splits numpy array along axis into one array per axis index
    # If keep_dim is False the split axis is dropped from the array dimensions
@@ -996,11 +1134,13 @@ else:
       z_min = float(z_min)
       z_max = float(z_max)
       dz = (z_max - z_min)/z_size
-
+      
 period = (z_periodic, y_periodic, x_periodic, True)
       
 dim_scalar = (z_size,y_size,x_size)
 dim_vector = (z_size,y_size,x_size,3)
+
+Ncells_total = np.product(dim_scalar)
 
 vol = dx*dy*dz
 
@@ -1023,6 +1163,10 @@ array_indices.append(tmp)
 
 test_interpolators()
 
+timers = my_timers()
+timers.tic("total")
+timers.tic("init")
+
 initialise_populations()
 
 initialise_fields()
@@ -1032,21 +1176,55 @@ for pop in pops.values():
    print("Uncentering particles of population " + pop.name)
    pop.moveParticles(-dt/2)
 
+timers.toc("init")
+
 for jj in range(args.steps):
    print("")
    print("Starting time step " + str(jj + 1))
+
+   timers.tic("mover")
+   
    print("")
    print("Moving particles")
    for pop in pops.values():
       pop.moveParticles(dt)
+
+   timers.toc("mover")
+   timers.tic("alpha")
+      
    print("Calculating alpha \"rotation\" matrices")
    for pop in pops.values():
       pop.compute_alpha(faceB)
-   
-   print("")
-   print("Computing rotated current")
-   current = []
-   for pop in pops.values():
-      current = pop.compute_rotated_current()
 
+   timers.toc("alpha")
+   timers.tic("current")
+      
+   print("Computing rotated current")
+   current = np.zeros(dim_vector)
+   for pop in pops.values():
+      current += pop.compute_rotated_current()
+
+   timers.toc("current")
+   timers.tic("mass matrices")
+      
+   print("Computing mass matrices")
+   if oneV:
+      mass_matrices = np.zeros((1,1,x_size,x_size))
+   else:
+      mass_matrices = np.zeros((3,3,Ncells_total,Ncells_total))
+   
+   for pop in pops.values():
+      mass_matrices += pop.compute_mass_matrices()
+
+   timers.toc("mass matrices")
+
+timers.toc("total")
+   
+print("Total time:           " + str(timers.timers["total"]))
+print("Initialisation:       " + str(timers.timers["init"]))
+print("Particle Mover:       " + str(timers.timers["mover"]))
+print("Alpha Computation:    " + str(timers.timers["alpha"]))
+print("Current Accumulation: " + str(timers.timers["current"]))
+print("Mass Matrices:        " + str(timers.timers["mass matrices"]))
+   
 breakpoint()
