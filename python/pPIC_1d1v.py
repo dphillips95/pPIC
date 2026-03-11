@@ -1,8 +1,10 @@
+import sys
 import os
 import math
 import numpy as np
 import scipy as sp
 import scipy.constants as const
+from scipy.sparse.linalg import gmres
 from timeit import default_timer as timer
 import configparser
 import argparse
@@ -18,6 +20,12 @@ parser.add_argument("--dt", type = float,
                     help = "Time step size (s). If this violates stability bounds then code will abort unless \"unsafe\" option is used")
 parser.add_argument("--mass-ratio", type = float,
                     help = "Ratio of proton to electron mass. Defaults to physical value")
+parser.add_argument("--theta", type = float,
+                    help = "Theta parameter for maxwell integration; must be theta >= 0.5, theta = 0.5 is 2nd order, theta > 0.5 suppresses some oscillations")
+parser.add_argument("--rtol", type = float,
+                    help = "gmres relative tolerance, norm(b - A @ x) <= rtol*norm(b)")
+parser.add_argument("--atol", type = float,
+                    help = "gmres absolute tolerance, norm(b - A @ x) <= atol")
 parser.add_argument("--seed", type = int, help = "Rng seed")
 args = parser.parse_args()
 
@@ -45,9 +53,15 @@ def configHelp():
    print("")
    print("   dt (s): Time step size. If this violates stability bounds then code will abort unless \"unsafe\" option is used")
    print("")
+   print("   theta (float): Theta parameter for maxwell integration; must be 0.5 <= theta <= 1.0, theta = 0.5 is 2nd order, theta > 0.5 suppresses some oscillations")
+   print("")
    print("   species_list (str ...): List of species names, separated by spaces. Each species should have its own section of the configuration file [<Species_Name>]. One species must be \"e-\" (electrons).")
    print("")
    print("   mass_ratio (float): Ratio of proton to electron mass")
+   print("")
+   print("   rtol (float): gmres relative tolerance, norm(b - A @ x) <= rtol*norm(b)")
+   print("")
+   print("   atol (float): gmres absolute tolerance, norm(b - A @ x) <= atol")
    print("")
    print("")
    print("[domain] options:")
@@ -131,6 +145,24 @@ def readConfig(fName, args):
    args.dt = config.get("simulation", "dt", vars = args_dict)
    if args.dt is not None:
       args.dt = float(args.dt)
+
+   args.theta = config.get("simulation", "theta", vars = args_dict)
+   if args.theta is None:
+      args.theta = 0.5
+   else:
+      args.theta = float(args.theta)
+   
+   args.rtol = config.get("simulation", "rtol", vars = args_dict)
+   if args.rtol is None:
+      args.rtol = 1e-6
+   else:
+      args.rtol = float(args.rtol)
+   
+   args.atol = config.get("simulation", "atol", vars = args_dict)
+   if args.atol is None:
+      args.atol = 0.0
+   else:
+      args.atol = float(args.atol)
    
    return args,config
 
@@ -141,6 +173,10 @@ class my_timers:
          'alpha':0.0,
          'current':0.0,
          'mass matrices':0.0,
+         'maxwell':0.0,
+         'build A':0.0,
+         'build b':0.0,
+         'gmres':0.0,
          'mover':0.0,
          'total':0.0
          }
@@ -238,7 +274,7 @@ class Pop:
       self.r = self.r[to_keep]
       self.v = self.v[to_keep]
       self.alpha = self.alpha[to_keep]      
-      
+   
    def accumulators(self):
       # Accumulate macroparticles into cell-centred charge and current densities
       x_locs = np.round((self.r[:,0] - x_min)/dx).astype(int)
@@ -349,6 +385,73 @@ class Pop:
       
       self.apply_boundaries()
 
+   def nodeU(self):
+      # Computes bulk velocity at nodes
+      nodeU = np.zeros(dim_vector)
+      node_w = np.zeros(dim_vector)
+      
+      for r,v in zip(self.r,self.v):
+         x_locs = np.floor((r[0] - x_min)/dx).astype(int)
+         y_locs = np.floor((r[1] - y_min)/dy).astype(int)
+         z_locs = np.floor((r[2] - z_min)/dz).astype(int)
+         
+         x0 = x_locs*dx + x_min
+         y0 = y_locs*dy + y_min
+         z0 = z_locs*dz + z_min
+         
+         x_w1 = (r[0] - x0)/dx
+         y_w1 = (r[1] - y0)/dy
+         z_w1 = (r[2] - z0)/dz
+         
+         x_w0 = 1 - x_w1
+         y_w0 = 1 - y_w1
+         z_w0 = 1 - z_w1
+         
+         x_ind0 = x_locs
+         x_ind1 = arr_shift(range(x_size), -1, 0, (x_periodic,))[x_locs]
+         y_ind0 = y_locs
+         y_ind1 = arr_shift(range(y_size), -1, 0, (y_periodic,))[y_locs]
+         z_ind0 = z_locs
+         z_ind1 = arr_shift(range(z_size), -1, 0, (z_periodic,))[z_locs]
+         
+         if oneV is True:
+            nodeU[z_ind0,y_ind0,x_ind0,:] += x_w0*v
+            nodeU[z_ind0,y_ind0,x_ind1,:] += x_w1*v
+            
+            node_w[z_ind0,y_ind0,x_ind0,:] += x_w0
+            node_w[z_ind0,y_ind0,x_ind1,:] += x_w1
+         else:
+            w_lll = x_w0 * y_w0 * z_w0
+            w_rll = x_w1 * y_w0 * z_w0
+            w_lrl = x_w0 * y_w1 * z_w0
+            w_llr = x_w0 * y_w0 * z_w1
+            w_rrl = x_w1 * y_w1 * z_w0
+            w_rlr = x_w1 * y_w0 * z_w1
+            w_lrr = x_w0 * y_w1 * z_w1
+            w_rrr = x_w1 * y_w1 * z_w1
+            
+            nodeU[z_ind0,y_ind0,x_ind0,:] += w_lll*v
+            nodeU[z_ind1,y_ind0,x_ind0,:] += w_rll*v
+            nodeU[z_ind0,y_ind1,x_ind0,:] += w_lrl*v
+            nodeU[z_ind0,y_ind0,x_ind1,:] += w_llr*v
+            nodeU[z_ind1,y_ind1,x_ind0,:] += w_rrl*v
+            nodeU[z_ind1,y_ind0,x_ind1,:] += w_rlr*v
+            nodeU[z_ind0,y_ind1,x_ind1,:] += w_lrr*v
+            nodeU[z_ind1,y_ind1,x_ind1,:] += w_rrr*v
+            
+            node_w[z_ind0,y_ind0,x_ind0,:] += w_lll
+            node_w[z_ind1,y_ind0,x_ind0,:] += w_rll
+            node_w[z_ind0,y_ind1,x_ind0,:] += w_lrl
+            node_w[z_ind0,y_ind0,x_ind1,:] += w_llr
+            node_w[z_ind1,y_ind1,x_ind0,:] += w_rrl
+            node_w[z_ind1,y_ind0,x_ind1,:] += w_rlr
+            node_w[z_ind0,y_ind1,x_ind1,:] += w_lrr
+            node_w[z_ind1,y_ind1,x_ind1,:] += w_rrr
+
+      nodeU /= node_w
+      
+      return nodeU
+   
    # def compute_rotated_current(self):
    #    # Computes current due to B-rotation
    #    # Current is stored at nodes to match E
@@ -524,7 +627,7 @@ class Pop:
          if oneV is True:
             for xi,x_wi in zip(x_ind,x_w):
                for xj,x_wj in zip(x_ind,x_w):
-                  M[0,0,xi,xj] += x_wi*x_wj
+                  M[0,0,xi,xj] += x_wi*x_wj * alpha[0,0]
          else:
             for xi,x_wi in zip(x_ind,x_w):
                for xj,x_wj in zip(x_ind,x_w):
@@ -539,7 +642,7 @@ class Pop:
       
       beta = (self.q*dt)/(2*self.m)
       M *= beta * self.q*self.w/vol
-                                    
+      
       return M
 
 def split_axis(arr, axis, keep_dim = False):
@@ -1034,6 +1137,52 @@ def initialise_fields():
          faceB[:,:,:,1] += By
          faceB[:,:,:,2] += Bz
 
+   nodeB = face2node(faceB)
+   nodeUe = pops["e-"].nodeU()
+
+   nodeE = -np.cross(nodeUe, nodeB)
+
+def build_A(mass_matrices):
+   # Construct sparse matrix A of Ax = b equation representing Maxwell's equations
+   if oneV:
+      A = np.zeros((2*Ncells_total,2*Ncells_total))
+      A[0:Ncells_total,Ncells_total:2*Ncells_total] -= theta*mass_matrices[0,0]
+      for ii in range(Ncells_total):
+         A[ii,ii + Ncells_total] -= 1/(const.c**2*dt)
+      
+      for ii in range(Ncells_total):
+         A[ii + Ncells_total,ii] += 1/dt
+   else:
+      A = np.zeros((6*Ncells_total,6*Ncells_total))
+      
+   return A
+
+def build_b(faceB,nodeE,nodeJ_hat,mass_matrices):
+   # Construct constant vector b of Ax = b equation representing Maxwell's equations
+   Bx,By,Bz = split_axis(faceB, 3)
+   Ex,Ey,Ez = split_axis(nodeE, 3)
+   Jx,Jy,Jz = split_axis(nodeJ_hat, 3)
+
+   Bx = Bx.flatten()
+   By = By.flatten()
+   Bz = Bz.flatten()
+   Ex = Ex.flatten()
+   Ey = Ey.flatten()
+   Ez = Ez.flatten()
+   Jx = Jx.flatten()
+   Jy = Jy.flatten()
+   Jz = Jz.flatten()
+   
+   if oneV:
+      b = np.zeros(2*Ncells_total)
+      b[:Ncells_total] = -1/(const.c**2*dt)*Ex+const.mu_0*Jx+(1-theta)*mass_matrices[0,0]@Ex
+      
+      b[Ncells_total:] = 1/dt*Bx
+   else:
+      b = np.zeros(6*Ncells_total)
+   
+   return b
+            
 def test_interpolators():
    # Test interpolation methods
    Np = 10
@@ -1074,6 +1223,7 @@ def test_interpolators():
 args,config = readConfig(args.config, args)
 
 dt = args.dt
+theta = args.theta
 
 dimensions = config.getint("main", "dimensions", fallback = 3)
 
@@ -1200,16 +1350,16 @@ for jj in range(args.steps):
    timers.tic("current")
       
    print("Computing rotated current")
-   current = np.zeros(dim_vector)
+   nodeJ_hat = np.zeros(dim_vector)
    for pop in pops.values():
-      current += pop.compute_rotated_current()
+      nodeJ_hat += pop.compute_rotated_current()
 
    timers.toc("current")
    timers.tic("mass matrices")
       
    print("Computing mass matrices")
    if oneV:
-      mass_matrices = np.zeros((1,1,x_size,x_size))
+      mass_matrices = np.zeros((1,1,Ncells_total,Ncells_total))
    else:
       mass_matrices = np.zeros((3,3,Ncells_total,Ncells_total))
    
@@ -1217,6 +1367,49 @@ for jj in range(args.steps):
       mass_matrices += pop.compute_mass_matrices()
 
    timers.toc("mass matrices")
+   timers.tic("maxwell")
+
+   print("Solving Maxwell's equations")
+   timers.tic("build A")
+   A = build_A(mass_matrices)
+   timers.toc("build A")
+   
+   timers.tic("build b")
+   b = build_b(faceB, nodeE, nodeJ_hat, mass_matrices)
+   timers.toc("build b")
+   
+   timers.tic("gmres")
+   info = 1
+   rtol = args.rtol
+   atol = args.atol
+   
+   if oneV:
+      x0 = np.concatenate((faceB[:,:,:,0].flat,nodeE[:,:,:,0].flat))
+   else:
+      x0 = np.concatenate((faceB.flat,nodeE.flat))
+   breakpoint()
+   while info > 0 and rtol < 1e-2 and atol < 1e-2:
+      xnext,info = gmres(A, b, rtol = rtol, atol = atol, x0 = x0)
+      if info > 0:
+         rtol *= 10
+         atol *= 10
+   breakpoint()
+   if info < 0:
+      sys.stderr.write("Illegal input in timestep " + str(jj) + "\n")
+      sys.exit(1)
+   elif info > 0:
+      sys.stderr.write("Did not convergence in timestep " + str(jj) + "\n")
+      sys.exit(1)
+   timers.toc("gmres")
+
+   newFaceB = faceB.copy()
+   newNodeE = nodeE.copy()
+
+   if oneV:
+      newFaceB[:,:,:,0] = xnext[:Ncells_total].reshape(dim_scalar)
+      newNodeE[:,:,:,0] = xnext[Ncells_total:].reshape(dim_scalar)
+   breakpoint()
+   timers.toc("maxwell")
 
 timers.toc("total")
    
@@ -1226,5 +1419,9 @@ print("Particle Mover:       " + str(timers.timers["mover"]))
 print("Alpha Computation:    " + str(timers.timers["alpha"]))
 print("Current Accumulation: " + str(timers.timers["current"]))
 print("Mass Matrices:        " + str(timers.timers["mass matrices"]))
+print("Maxwell:              " + str(timers.timers["maxwell"]))
+print("   build A:           " + str(timers.timers["build A"]))
+print("   build b:           " + str(timers.timers["build b"]))
+print("   gmres:             " + str(timers.timers["gmres"]))
    
 breakpoint()
