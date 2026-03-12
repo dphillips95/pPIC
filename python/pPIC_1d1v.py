@@ -63,6 +63,8 @@ def configHelp():
    print("")
    print("   atol (float): gmres absolute tolerance, norm(b - A @ x) <= atol")
    print("")
+   print("   Vdt_dx_cap (float): Maximum ratio of time step to dx/maxV, i.e. caps particle movement to given fraction of cell width, default is 0.5")
+   print("")
    print("")
    print("[domain] options:")
    print("   x_min (m): Minimum x-coordinate")
@@ -381,7 +383,7 @@ class Pop:
          self.alpha *= factor.reshape(self.Np,1,1)
 
    def moveParticles(self, dstep):
-      # Pushes particle positions by time dt
+      # Pushes particle positions by time dstep
       self.r += self.v * dstep
       
       self.apply_boundaries()
@@ -1167,7 +1169,7 @@ def build_A(mass_matrices):
    # Construct sparse matrix A of Ax = b equation representing Maxwell's equations
    if oneV:
       A = np.zeros((2*Ncells_total,2*Ncells_total))
-      A[0:Ncells_total,Ncells_total:2*Ncells_total] -= theta*mass_matrices[0,0]
+      A[0:Ncells_total,Ncells_total:2*Ncells_total] -= const.mu_0*theta*mass_matrices[0,0]
       for ii in range(Ncells_total):
          A[ii,ii + Ncells_total] -= 1/(const.c**2*dt)
       
@@ -1196,9 +1198,9 @@ def build_b(faceB,nodeE,nodeJ_hat,mass_matrices):
    
    if oneV:
       b = np.zeros(2*Ncells_total)
-      b[:Ncells_total] = -1/(const.c**2*dt)*Ex+const.mu_0*Jx+(1-theta)*mass_matrices[0,0]@Ex
+      b[:Ncells_total] += -1/(const.c**2*dt)*Ex+const.mu_0*Jx+const.mu_0*(1-theta)*mass_matrices[0,0]@Ex
       
-      b[Ncells_total:] = 1/dt*Bx
+      b[Ncells_total:] += 1/dt*Bx
    else:
       b = np.zeros(6*Ncells_total)
    
@@ -1240,11 +1242,29 @@ def test_interpolators():
    face_to_cell = face2cell(face)
    face_to_node = face2node(face)
    face_to_r = face2r(face, r)
+
+def cap_dt(pops):
+   # Restrict dt if necessary, or expand
+   global dt
+   maxV = 0.0
+   for pop in pops.values():
+      maxV = max(maxV, np.linalg.norm(pop.v, axis = 1).max())
+   
+   if args.dt*maxV > dx*dt_cap:
+      print("")
+      print("WARNING: maximum particle motion for given particle velocity exceeded, shrinking time step accordingly")
+
+   if maxV > 0:
+      dt = min(dt, dx/maxV*dt_cap)
+   else:
+      dt = args.dt
    
 args,config = readConfig(args.config, args)
 
 dt = args.dt
 theta = args.theta
+
+dt_cap = config.getfloat("simulation", "Vdt_dx_cap", fallback = 0.5)
 
 dimensions = config.getint("main", "dimensions", fallback = 3)
 
@@ -1342,6 +1362,8 @@ initialise_populations()
 
 initialise_fields()
 
+cap_dt(pops)
+
 for pop in pops.values():
    print("")
    print("Uncentering particles of population " + pop.name)
@@ -1355,7 +1377,7 @@ timers.toc("init")
 for jj in range(args.steps):
    print("")
    print("Starting time step " + str(jj + 1))
-
+   
    timers.tic("mover")
    
    print("")
@@ -1425,7 +1447,7 @@ for jj in range(args.steps):
       sys.stderr.write("Did not convergence in timestep " + str(jj) + "\n")
       sys.exit(1)
    timers.toc("gmres")
-
+   
    newFaceB = faceB.copy()
    newNodeE = nodeE.copy()
 
@@ -1460,5 +1482,7 @@ print("   build A:           " + str(timers.timers["build A"]))
 print("   build b:           " + str(timers.timers["build b"]))
 print("   gmres:             " + str(timers.timers["gmres"]))
 print("Lorentz Force update: " + str(timers.timers["lorentz"]))
-   
+
+tmp2 = pops["e-"].v - tmp_v
+
 breakpoint()
