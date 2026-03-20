@@ -14,6 +14,7 @@ from numba import njit
 from numba.experimental import jitclass as jitclass
 import configparser
 import argparse
+import xarray as xr
 
 from tools import split_axis
 from interpolators import face2cell,face2node,face2r,cell2node,cell2face,cell2r,node2face,node2cell,node2r,face2cell_njit,face2node_njit,face2r_njit,cell2node_njit,cell2face_njit,cell2r_njit,node2face_njit,node2cell_njit,node2r_njit
@@ -213,7 +214,7 @@ Dims_spec = [
    ("dx", float64),
    ("dy", float64),
    ("dz", float64),
-   ("vol", float64),
+   ("dV", float64),
    ("x_size", int64),
    ("y_size", int64),
    ("z_size", int64),
@@ -244,7 +245,7 @@ class Dims:
       self.dx = (self.x_max - self.x_min)/self.x_size
       self.dy = (self.y_max - self.y_min)/self.y_size
       self.dz = (self.z_max - self.z_min)/self.z_size
-      self.vol = self.dx*self.dy*self.dz
+      self.dV = self.dx*self.dy*self.dz
       self.dt = dt
       self.theta = theta
       self.Ncells_total = self.x_size*self.y_size*self.z_size
@@ -301,7 +302,7 @@ def initialise_populations():
       density = config.getfloat(pop_name, "density", fallback = None)
       macros = config.getint(pop_name, "macroparticles_per_cell", fallback = None)
       
-      weight = density*dims.vol/macros
+      weight = density*dims.dV/macros
 
       if electron:
          mass = const.m_p/args.mass_ratio
@@ -316,12 +317,17 @@ def build_A(mass_matrices):
    # Construct sparse matrix A of Ax = b equation representing Maxwell's equations
    if dims.oneV:
       A = np.zeros((2*dims.Ncells_total,2*dims.Ncells_total))
-      A[0:dims.Ncells_total,dims.Ncells_total:2*dims.Ncells_total] -= const.mu_0*dims.theta*mass_matrices[0,0]
-      for ii in range(dims.Ncells_total):
-         A[ii,ii + dims.Ncells_total] -= 1/(const.c**2*dims.dt)
+      A[:dims.Ncells_total,dims.Ncells_total:] += dims.dt*const.mu_0*dims.theta*mass_matrices[0,0]
+
+      A[:dims.Ncells_total,dims.Ncells_total:] += np.identity(dims.Ncells_total)/const.c**2
+
+      # for ii in range(dims.Ncells_total):
+      #    A[ii,ii + dims.Ncells_total] += 1/const.c**2
+
+      A[dims.Ncells_total:,:dims.Ncells_total] = np.identity(dims.Ncells_total)
       
-      for ii in range(dims.Ncells_total):
-         A[ii + dims.Ncells_total,ii] += 1/dims.dt
+      # for ii in range(dims.Ncells_total):
+      #    A[ii + dims.Ncells_total,ii] += 1
    else:
       A = np.zeros((6*dims.Ncells_total,6*dims.Ncells_total))
       
@@ -345,9 +351,9 @@ def build_b(faceB,nodeE,nodeJ_hat,mass_matrices):
    
    if dims.oneV:
       b = np.zeros(2*dims.Ncells_total)
-      b[:dims.Ncells_total] += -1/(const.c**2*dims.dt)*Ex+const.mu_0*Jx+const.mu_0*(1-dims.theta)*mass_matrices[0,0]@Ex
+      b[:dims.Ncells_total] += 1/const.c**2*Ex-dims.dt*const.mu_0*Jx-dims.dt*const.mu_0*(1-dims.theta)*mass_matrices[0,0]@Ex
       
-      b[dims.Ncells_total:] += 1/dims.dt*Bx
+      b[dims.Ncells_total:] += Bx
    else:
       b = np.zeros(6*dims.Ncells_total)
    
@@ -729,14 +735,11 @@ for name,pop in pops.items():
    print("")
    print("Uncentering particles of population " + name)
    moveParticles(pop, -dims.dt/2, dims)
-
-tmp_r = pops["e-"].r.copy()
-tmp_v = pops["e-"].v.copy()
    
 timers.toc("init")
 
-if os.path.isfile(args.out_dir + "/fields.h5") or os.path.isfile(args.out_dir + "/pops.h5"):
-   print("Output files already exist, aborting")
+if os.path.isfile(args.out_dir + "/fields.h5") or os.path.isfile(args.out_dir + "/pops.h5") or os.path.isfile(args.out_dir + "/logs.h5"):
+   print("Output file(s) already exist, aborting")
    sys.exit()
 
 save_data(args.out_dir, fields, pops, dims)
@@ -780,8 +783,9 @@ for jj in range(args.steps):
       mass_matrices += compute_mass_matrices(pop, dims)
    
    timers.toc("mass matrices")
+   # breakpoint()
    timers.tic("maxwell")
-
+   
    print("Solving Maxwell's equations")
 
    timers.tic("build A")
@@ -792,7 +796,7 @@ for jj in range(args.steps):
    timers.tic("build b")
 
    b = build_b(fields.faceB, fields.nodeE, fields.nodeJ_hat, mass_matrices)
-
+   
    timers.toc("build b")
    timers.tic("gmres")
 
@@ -817,15 +821,25 @@ for jj in range(args.steps):
    elif info > 0:
       sys.stderr.write("Did not convergence in timestep " + str(jj) + "\n")
       sys.exit(1)
-
+   
    timers.toc("gmres")
+
+   cellJ = np.zeros(dims.dim_vector, dtype = np.float64)
+   for pop in pops.values():
+      cellJ += pop.cellJi
+
+   nodeJ = cell2node(cellJ, dims)
+      
+   implicitE = fields.nodeE - nodeJ*dims.dt/const.epsilon_0
+
+   old_nodeE = fields.nodeE.copy()
    
    fields,midNodeE = upwind_fields(fields, xnext, dims)
 
    timers.toc("maxwell")
    timers.toc("field solver")
    timers.tic("lorentz")
-   
+
    for pop in pops.values():
       Lorentz(pop, midNodeE, dims)
       # pop.v = Lorentz_njit(pop.r, pop.v, pop.alpha, pop.q, pop.m, midNodeE, dims)
@@ -834,7 +848,7 @@ for jj in range(args.steps):
    timers.tic("extra")
    
    for pop in pops.values():
-      # accumulators(pop, dims)
+      accumulators(pop, dims)
       calcNodeData(pop, dims)
    # fields.update_fields(pops, dims)
    
@@ -866,7 +880,3 @@ print("Unused fields update: " + str(timers.timers["extra"]))
 print("Field Solver:         " + str(timers.timers["field solver"]))
 print("Particle Mover:       " + str(timers.timers["locs"] + timers.timers["lorentz"]))
 print("Data saving:          " + str(timers.timers["output"]))
-
-tmp2 = pops["e-"].v - tmp_v
-
-breakpoint()
