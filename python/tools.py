@@ -408,3 +408,18 @@ def numba_unravel_index(index, dims):
       zi = (index // (dims[2] * dims[3])) % dims[1]
       wi = index // (dims[1] * dims[2] * dims[3])
       return np.array([wi,zi,yi,xi], dtype = int64)
+
+def floatToStr(value, decimals = 0, pad = None):
+   # Converts float to string with given number of decimals (rounded)
+   # decimals must be an integer
+   # If pad is a positive integer then zeros are padded to front to match number before decimal
+   if not isinstance(decimals, int):
+      raise TypeError("Number of decimals must be integer")
+   if pad is not None and not isinstance(pad, int):
+      raise TypeError("Number of decimals must be integer")
+   formatter = "{0:0"
+   if pad is not None:
+      total = pad + decimals + 1
+      formatter += str(total)
+   formatter += "." + str(decimals) + "f}"
+   return formatter.format(value)

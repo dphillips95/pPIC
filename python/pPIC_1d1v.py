@@ -16,7 +16,7 @@ import configparser
 import argparse
 import xarray as xr
 
-from tools import split_axis
+from tools import split_axis,floatToStr
 from interpolators import face2cell,face2node,face2r,cell2node,cell2face,cell2r,node2face,node2cell,node2r,face2cell_njit,face2node_njit,face2r_njit,cell2node_njit,cell2face_njit,cell2r_njit,node2face_njit,node2cell_njit,node2r_njit
 from populations import Pop,compute_alpha,moveParticles,Lorentz,compute_rotated_current,compute_mass_matrices,accumulators,calcNodeData,Pop_njit,compute_alpha_njit,moveParticles_njit,Lorentz_njit,compute_rotated_current_njit,compute_mass_matrices_njit
 from fields import Fields,upwind_fields
@@ -864,19 +864,21 @@ for jj in range(args.steps):
    timers.toc("output")
 
 timers.toc("total")
-   
-print("Total time:           " + str(timers.timers["total"]))
-print("Initialisation:       " + str(timers.timers["init"]))
-print("Particle locs update: " + str(timers.timers["locs"]))
-print("Alpha Computation:    " + str(timers.timers["alpha"]))
-print("Current Accumulation: " + str(timers.timers["current"]))
-print("Mass Matrices:        " + str(timers.timers["mass matrices"]))
-print("Maxwell:              " + str(timers.timers["maxwell"]))
-print("   build A:           " + str(timers.timers["build A"]))
-print("   build b:           " + str(timers.timers["build b"]))
-print("   gmres:             " + str(timers.timers["gmres"]))
-print("Lorentz Force update: " + str(timers.timers["lorentz"]))
-print("Unused fields update: " + str(timers.timers["extra"]))
-print("Field Solver:         " + str(timers.timers["field solver"]))
-print("Particle Mover:       " + str(timers.timers["locs"] + timers.timers["lorentz"]))
-print("Data saving:          " + str(timers.timers["output"]))
+
+print("")
+print("Time per timestep and cell [ms/(timestep cell)]:")
+print("Total time:           " + floatToStr(1000*timers.timers["total"]/(dims.timestep*dims.Ncells_total), decimals = 3))
+print("Initialisation:       " + floatToStr(1000*timers.timers["init"]/(dims.timestep*dims.Ncells_total), decimals = 3))
+print("Particle locs update: " + floatToStr(1000*timers.timers["locs"]/(dims.timestep*dims.Ncells_total), decimals = 3))
+print("Alpha Computation:    " + floatToStr(1000*timers.timers["alpha"]/(dims.timestep*dims.Ncells_total), decimals = 3))
+print("Current Accumulation: " + floatToStr(1000*timers.timers["current"]/(dims.timestep*dims.Ncells_total), decimals = 3))
+print("Mass Matrices:        " + floatToStr(1000*timers.timers["mass matrices"]/(dims.timestep*dims.Ncells_total), decimals = 3))
+print("Maxwell:              " + floatToStr(1000*timers.timers["maxwell"]/(dims.timestep*dims.Ncells_total), decimals = 3))
+print("   build A:           " + floatToStr(1000*timers.timers["build A"]/(dims.timestep*dims.Ncells_total), decimals = 3))
+print("   build b:           " + floatToStr(1000*timers.timers["build b"]/(dims.timestep*dims.Ncells_total), decimals = 3))
+print("   gmres:             " + floatToStr(1000*timers.timers["gmres"]/(dims.timestep*dims.Ncells_total), decimals = 3))
+print("Lorentz Force update: " + floatToStr(1000*timers.timers["lorentz"]/(dims.timestep*dims.Ncells_total), decimals = 3))
+print("Unused fields update: " + floatToStr(1000*timers.timers["extra"]/(dims.timestep*dims.Ncells_total), decimals = 3))
+print("Field Solver:         " + floatToStr(1000*timers.timers["field solver"]/(dims.timestep*dims.Ncells_total), decimals = 3))
+print("Particle Mover:       " + floatToStr(1000*(timers.timers["locs"] + timers.timers["lorentz"])/(dims.timestep*dims.Ncells_total), decimals = 3))
+print("Data saving:          " + floatToStr(1000*timers.timers["output"]/(dims.timestep*dims.Ncells_total), decimals = 3))
