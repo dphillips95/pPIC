@@ -7,7 +7,7 @@ import scipy.constants as const
 from scipy.sparse.linalg import gmres
 from timeit import default_timer as timer
 import numba
-from numba import int64,float64
+from numba import int64,float64,boolean
 from numba import types
 from numba.typed import Dict as nb_dict
 from numba import njit
@@ -15,9 +15,11 @@ from numba.experimental import jitclass as jitclass
 import configparser
 import argparse
 
-from interpolators import face2cell,face2node,face2r,cell2node,cell2face,cell2r,node2face,node2cell,node2r,face2cell_njit,face2node_njit,face2r_njit,cell2node_njit,cell2face_njit,cell2r_njit,node2face_njit,node2cell_njit,node2r_njit
-
 from tools import split_axis
+from interpolators import face2cell,face2node,face2r,cell2node,cell2face,cell2r,node2face,node2cell,node2r,face2cell_njit,face2node_njit,face2r_njit,cell2node_njit,cell2face_njit,cell2r_njit,node2face_njit,node2cell_njit,node2r_njit
+from populations import Pop,compute_alpha,moveParticles,Lorentz,compute_rotated_current,compute_mass_matrices,accumulators,calcNodeData,Pop_njit,compute_alpha_njit,moveParticles_njit,Lorentz_njit,compute_rotated_current_njit,compute_mass_matrices_njit
+from fields import Fields,upwind_fields
+from output import save_data
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--config", type = str, default = "pPIC.cfg",
@@ -37,6 +39,8 @@ parser.add_argument("--rtol", type = float,
 parser.add_argument("--atol", type = float,
                     help = "gmres absolute tolerance, norm(b - A @ x) <= atol")
 parser.add_argument("--seed", type = int, help = "Rng seed")
+parser.add_argument("-o", "--out-dir", type = str, default = "./",
+                    help = "Output data directory path")
 args = parser.parse_args()
 
 def configHelp():
@@ -55,6 +59,8 @@ def configHelp():
    print("   dimensions (int): Restrict to n dimensions; forces higher dimensions to single box size, dimensions dk = dx")
    print("")
    print("   1v (bool): Restrict system to 1D velocity; automatically enforces 1D domain (dimensions = 1)")
+   print("")
+   print("   use_nonlinear_r_interpolation (bool): Use distance-weighted interpolation in cell2r and node2r instead of trilinear")
    print("")
    print("")
    print("[simulation] options:")
@@ -179,19 +185,7 @@ def readConfig(fName, args):
 
 class my_timers:
    def __init__(self):
-      self.timers = {
-         'init':0.0,
-         'alpha':0.0,
-         'current':0.0,
-         'mass matrices':0.0,
-         'maxwell':0.0,
-         'build A':0.0,
-         'build b':0.0,
-         'gmres':0.0,
-         'mover':0.0,
-         'lorentz':0.0,
-         'total':0.0
-         }
+      self.timers = dict()
 
    def tic(self, _timer_):
       self.timers[_timer_] -= timer()
@@ -199,10 +193,17 @@ class my_timers:
    def toc(self, _timer_):
       self.timers[_timer_] += timer()
    
-   def reset(self, _timer_):
+   def start(self, _timer_):
       self.timers[_timer_] = 0.0
 
-dims_spec = [
+   def reset(self, _timer_ = None):
+      if _timer_ == None:
+         for key in self.timers.keys():
+            self.timers[key] = 0.0
+      else:
+         self.timers[_timer_] = 0.0
+
+Dims_spec = [
    ("x_min", float64),
    ("x_max", float64),
    ("y_min", float64),
@@ -221,567 +222,63 @@ dims_spec = [
    ("dim_vector", int64[:]),
    ("x_range", int64[:]),
    ("y_range", int64[:]),
-   ("z_range", int64[:])
+   ("z_range", int64[:]),
+   ("x_locs", float64[:]),
+   ("y_locs", float64[:]),
+   ("z_locs", float64[:]),
+   ("period", boolean[:]),
+   ("linear", boolean),
+   ("oneV", boolean),
+   ("dt", float64),
+   ("time", float64),
+   ("timestep", int64),
+   ("theta", float64)
 ]
 
-@jitclass(dims_spec)
+@jitclass(Dims_spec)
 class Dims:
-   def __init__(self, lims, spacing, sizes):
+   def __init__(self, lims, dt, theta, sizes, period, linear, oneV, time = 0.0, timestep = 0):
       # Pseudo-dict containg dimension params
       (self.x_min,self.x_max),(self.y_min,self.y_max),(self.z_min,self.z_max) = lims
-      self.dx,self.dy,self.dz = spacing
-      self.vol = self.dx*self.dy*self.dz
       self.x_size,self.y_size,self.z_size = sizes
+      self.dx = (self.x_max - self.x_min)/self.x_size
+      self.dy = (self.y_max - self.y_min)/self.y_size
+      self.dz = (self.z_max - self.z_min)/self.z_size
+      self.vol = self.dx*self.dy*self.dz
+      self.dt = dt
+      self.theta = theta
       self.Ncells_total = self.x_size*self.y_size*self.z_size
       self.dim_scalar = np.array([self.z_size,self.y_size,self.x_size], dtype = int64)
       self.dim_vector = np.array([self.z_size,self.y_size,self.x_size,3], dtype = int64)
       self.x_range = np.array(list(range(self.x_size)), dtype = int64)
       self.y_range = np.array(list(range(self.y_size)), dtype = int64)
       self.z_range = np.array(list(range(self.z_size)), dtype = int64)
-
-class Pop:
-   def __init__(self, name, q, m, w, electron, Np, T = None, v = None):
-      # Initial fill of particle population
-      # If Np = 0 skips particle creation
-
-      # name = population name
-      # q = species charge (multiple of elementary charge)
-      # m = species mass (multiple of proton mass, including for electrons)
-      # w = species macroparticle weight
-      # electron = True if species is electrons, else protons
-      # Np = number of macroparticles to generate on population generation
-      # T = population temperature (dist. assumed Maxwellian)
-      # v = population bulk velocity
+      self.x_locs = np.linspace(self.x_min + self.dx/2, self.x_max - self.dx/2, self.x_size)
+      self.y_locs = np.linspace(self.y_min + self.dy/2, self.y_max - self.dy/2, self.y_size)
+      self.z_locs = np.linspace(self.z_min + self.dz/2, self.z_max - self.dz/2, self.z_size)
+      self.period = np.array(list(period), dtype = boolean)
+      self.linear = linear
+      self.oneV = oneV
+      self.time = time
+      self.timestep = timestep
       
-      self.name = name
-      self.q = q
-      self.m = m
-      self.w = w
-      
-      if Np > 0:
-         vth = math.sqrt(const.k*T/self.m)
-         self.uniform_injector(Np, vth, v)
-      
-      self.accumulators()
+   def copy(self):
+      # Copy dims via reconstruction - returns inputs to Dims() as tuple
+      lims = ((self.x_min,self.x_max),
+              (self.y_min,self.y_max),
+              (self.z_min,self.z_max))
+      dt = self.dt
+      sizes = (self.x_size,self.y_size,self.z_size)
+      period = self.period.copy()
+      linear = self.linear
+      oneV = self.oneV
 
-   def uniform_injector(self, Np, vth, v):
-      # Inject Np particles between xmin and xmax, bulk velocity v, and thermal velocity vth
+      return lims,dt,theta,sizes,period,linear,oneV,time,timestep
 
-      self.r = np.zeros((Np*dims.Ncells_total,3))
-      self.v = np.zeros((Np*dims.Ncells_total,3))
-
-      for ii in range(dims.Ncells_total):
-         zi,yi,xi = np.unravel_index(ii, dims.dim_scalar)
-         
-         cell_x_min = dims.x_min + xi*dims.dx
-         cell_x_max = dims.x_max - (dims.x_size - 1 - xi)*dims.dx
-         cell_y_min = dims.y_min + yi*dims.dy
-         cell_y_max = dims.y_max - (dims.y_size - 1 - yi)*dims.dy
-         cell_z_min = dims.z_min + zi*dims.dz
-         cell_z_max = z_max - (dims.z_size - 1 - zi)*dims.dz
-         
-         self.r[ii*Np:(ii+1)*Np,0] = rng.uniform(cell_x_min,cell_x_max, Np)
-         if oneV is True:
-            self.r[ii*Np:(ii+1)*Np,1] = (cell_y_max + cell_y_min)/2
-            self.r[ii*Np:(ii+1)*Np,2] = (cell_z_max + cell_z_min)/2
-         else:
-            self.r[ii*Np:(ii+1)*Np,1] = rng.uniform(cell_y_min,cell_y_max, Np)
-            self.r[ii*Np:(ii+1)*Np,2] = rng.uniform(cell_z_min,cell_z_max, Np)
-         self.v[ii*Np:(ii+1)*Np,0] = rng.normal(v[0], vth, Np)
-         if oneV is False:
-            self.v[ii*Np:(ii+1)*Np,1] = rng.normal(v[1], vth, Np)
-            self.v[ii*Np:(ii+1)*Np,2] = rng.normal(v[2], vth, Np)
-
-      self.Np = self.r.shape[0]
-   
-   def apply_boundaries(self):
-      # Apply boundary conditions to particles
-      # Periodic boundaries wrap locations
-      # Non-periodic delete particles
-
-      lims = ((dims.x_min,dims.x_max),(dims.y_min,dims.y_max),(dims.z_min,z_max))
-      sizes = (dims.x_size,dims.y_size,dims.z_size)
-      dgrid = (dims.dx,dims.dy,dims.dz)
-
-      del_list = np.repeat(False, self.Np)
-      
-      for ii,(lim,Ng,dg,rep) in enumerate(zip(lims,sizes,dgrid,period)):
-         cond = self.r[:,ii] < lim[0]
-         if rep:
-            while any(cond):
-               self.r[cond,ii] += Ng*dg
-               cond = self.r[:,ii] < lim[0]
-         else:
-            del_list |= cond
-
-         cond = self.r[:,ii] >= lim[1]
-         if rep:
-            while any(cond):
-               self.r[cond,ii] -= Ng*dg
-               cond = self.r[:,ii] >= lim[1]
-            if any(self.r[:,ii] < lim[0]):
-               raise ValueError("Particle could not be moved back inside domain")
-         else:
-            del_list |= cond
-      
-      if any(del_list):
-         self.removeParticle(del_list)
-   
-   def removeParticle(self, to_delete):
-      # Delete particle from population
-      to_keep = np.logical_not(to_delete)
-      self.r = self.r[to_keep]
-      self.v = self.v[to_keep]
-      self.alpha = self.alpha[to_keep]
-      self.Np = np.sum(to_keep)
-   
-   def accumulators(self):
-      # Accumulate macroparticles into cell-centred charge and current densities
-      x_locs = np.round((self.r[:,0] - dims.x_min)/dims.dx).astype(int)
-      y_locs = np.round((self.r[:,1] - dims.y_min)/dims.dy).astype(int)
-      z_locs = np.round((self.r[:,2] - dims.z_min)/dims.dz).astype(int)
-
-      if x_periodic:
-         x_locs = np.mod(x_locs, dims.x_size)
-      if y_periodic:
-         y_locs = np.mod(y_locs, dims.y_size)
-      if z_periodic:
-         z_locs = np.mod(z_locs, dims.z_size)
-      
-      self.rhoq = np.zeros(dims.dim_scalar, dtype = float)
-      self.cellJi = np.zeros(dims.dim_vector, dtype = float)
-      
-      x0 = (x_locs - 1 + 0.5)*dims.dx + dims.x_min
-      y0 = (y_locs - 1 + 0.5)*dims.dy + dims.y_min
-      z0 = (z_locs - 1 + 0.5)*dims.dz + dims.z_min
-      
-      x_w1 = (self.r[:,0] - x0)/dims.dx
-      y_w1 = (self.r[:,1] - y0)/dims.dy
-      z_w1 = (self.r[:,2] - z0)/dims.dz
-
-      if x_periodic:
-         x_w1 = np.mod(x_w1, 1)
-      if y_periodic:
-         y_w1 = np.mod(y_w1, 1)
-      if z_periodic:
-         z_w1 = np.mod(z_w1, 1)
-      
-      x_w0 = 1 - x_w1
-      y_w0 = 1 - y_w1
-      z_w0 = 1 - z_w1
-      
-      x_ind0 = x_locs - 1
-      if x_periodic:
-         x_ind0 = np.mod(x_ind0, dims.x_size)
-      x_ind1 = x_locs
-
-      y_ind0 = y_locs - 1
-      if y_periodic:
-         y_ind0 = np.mod(y_ind0, dims.y_size)
-      y_ind1 = y_locs
-
-      z_ind0 = z_locs - 1
-      if z_periodic:
-         z_ind0 = np.mod(z_ind0, dims.z_size)
-      z_ind1 = z_locs
-      
-      # CIC weight factors
-      w_000 = x_w0 * y_w0 * z_w0
-      w_001 = x_w0 * y_w0 * z_w1
-      w_010 = x_w0 * y_w1 * z_w0
-      w_011 = x_w0 * y_w1 * z_w1
-      w_100 = x_w1 * y_w0 * z_w0
-      w_101 = x_w1 * y_w0 * z_w1
-      w_110 = x_w1 * y_w1 * z_w0
-      w_111 = x_w1 * y_w1 * z_w1
-      
-      for x_ind_l,x_ind_r,y_ind_l,y_ind_r,z_ind_l,z_ind_r,w_lll,w_llr,w_lrl,w_lrr,w_rll,w_rlr,w_rrl,w_rrr,v in zip(x_ind0,x_ind1,y_ind0,y_ind1,z_ind0,z_ind1,w_000,w_001,w_010,w_011,w_100,w_101,w_110,w_111,self.v):
-         # Charge density
-         self.rhoq[z_ind_l,y_ind_l,x_ind_l] += w_lll
-         self.rhoq[z_ind_r,y_ind_l,x_ind_l] += w_rll
-         self.rhoq[z_ind_l,y_ind_r,x_ind_l] += w_lrl
-         self.rhoq[z_ind_l,y_ind_l,x_ind_r] += w_llr
-         self.rhoq[z_ind_r,y_ind_r,x_ind_l] += w_rrl
-         self.rhoq[z_ind_r,y_ind_l,x_ind_r] += w_rlr
-         self.rhoq[z_ind_l,y_ind_r,x_ind_r] += w_lrr
-         self.rhoq[z_ind_r,y_ind_r,x_ind_r] += w_rrr
-         
-         # (cell-centred) current density
-         self.cellJi[z_ind_l,y_ind_l,x_ind_l,:] += w_lll*v
-         self.cellJi[z_ind_r,y_ind_l,x_ind_l,:] += w_rll*v
-         self.cellJi[z_ind_l,y_ind_r,x_ind_l,:] += w_lrl*v
-         self.cellJi[z_ind_l,y_ind_l,x_ind_r,:] += w_llr*v
-         self.cellJi[z_ind_r,y_ind_r,x_ind_l,:] += w_rrl*v
-         self.cellJi[z_ind_r,y_ind_l,x_ind_r,:] += w_rlr*v
-         self.cellJi[z_ind_l,y_ind_r,x_ind_r,:] += w_lrr*v
-         self.cellJi[z_ind_r,y_ind_r,x_ind_r,:] += w_rrr*v
-
-      self.rhoq *= self.q*self.w/dims.vol
-      self.cellJi *= self.q*self.w/dims.vol
-
-   def compute_alpha(self, faceB):
-      # Compute alpha matrix for all particles in population
-      rB = face2r_njit(faceB, self.r, period, dims)
-
-      beta = (self.q*dt)/(2*self.m)
-
-      bx,by,bz = split_axis(rB*beta, axis = 1)
-      
-      if oneV is True:
-         self.alpha = np.zeros((self.Np,3,3))
-         
-         self.alpha[:,0,0] = 1
-      else:
-         factor = 1/(1 + bx**2 + by**2 + bz**2)
-         
-         self.alpha = np.zeros((self.Np,3,3))
-         self.alpha[:,0,0] = 1 + bx**2
-         self.alpha[:,0,1] = 1 + bz + bx*by
-         self.alpha[:,0,2] = 1 - by + bx*bz
-         self.alpha[:,1,0] = 1 - bz + bx*by
-         self.alpha[:,1,1] = 1 + by**2
-         self.alpha[:,1,2] = 1 + bx + by*bz
-         self.alpha[:,2,0] = 1 + by + bx*bz
-         self.alpha[:,2,1] = 1 - bx + by*bz
-         self.alpha[:,2,2] = 1 + bz**2
-
-         self.alpha *= factor.reshape(self.Np,1,1)
-
-   def moveParticles(self, dstep):
-      # Pushes particle positions by time dstep
-      self.r += self.v * dstep
-      
-      self.apply_boundaries()
-
-   def Lorentz(self, midNodeE):
-      # Accelerate particles via Lorentz force
-      rE = node2r_njit(midNodeE, self.r, period, dims)
-      
-      beta = (self.q*dt)/(2*self.m)
-      
-      for ii,(r,v,alpha,E) in enumerate(zip(self.r,self.v,self.alpha,rE)):
-         new_v = 2*alpha@(v + beta*E) - v
-         
-         self.v[ii] = new_v
-      
-   def nodeU(self):
-      # Computes bulk velocity at nodes
-      nodeU = np.zeros(dims.dim_vector)
-      node_w = np.zeros(dims.dim_vector)
-      
-      for r,v in zip(self.r,self.v):
-         x_locs = np.floor((r[0] - dims.x_min)/dims.dx).astype(int)
-         y_locs = np.floor((r[1] - dims.y_min)/dims.dy).astype(int)
-         z_locs = np.floor((r[2] - dims.z_min)/dims.dz).astype(int)
-         
-         x0 = x_locs*dims.dx + dims.x_min
-         y0 = y_locs*dims.dy + dims.y_min
-         z0 = z_locs*dims.dz + dims.z_min
-         
-         x_w1 = (r[0] - x0)/dims.dx
-         y_w1 = (r[1] - y0)/dims.dy
-         z_w1 = (r[2] - z0)/dims.dz
-         
-         x_w0 = 1 - x_w1
-         y_w0 = 1 - y_w1
-         z_w0 = 1 - z_w1
-         
-         x_ind0 = x_locs
-         x_ind1 = x_locs + 1
-         if x_periodic:
-            x_ind1 = np.mod(x_ind1, dims.x_size)
-         
-         y_ind0 = y_locs
-         y_ind1 = y_locs + 1
-         if y_periodic:
-            y_ind1 = np.mod(y_ind1, dims.y_size)
-         
-         z_ind0 = z_locs
-         z_ind1 = z_locs + 1
-         if z_periodic:
-            z_ind1 = np.mod(z_ind1, dims.z_size)
-         
-         if oneV is True:
-            nodeU[z_ind0,y_ind0,x_ind0,:] += x_w0*v
-            nodeU[z_ind0,y_ind0,x_ind1,:] += x_w1*v
-            
-            node_w[z_ind0,y_ind0,x_ind0,:] += x_w0
-            node_w[z_ind0,y_ind0,x_ind1,:] += x_w1
-         else:
-            w_lll = x_w0 * y_w0 * z_w0
-            w_rll = x_w1 * y_w0 * z_w0
-            w_lrl = x_w0 * y_w1 * z_w0
-            w_llr = x_w0 * y_w0 * z_w1
-            w_rrl = x_w1 * y_w1 * z_w0
-            w_rlr = x_w1 * y_w0 * z_w1
-            w_lrr = x_w0 * y_w1 * z_w1
-            w_rrr = x_w1 * y_w1 * z_w1
-            
-            nodeU[z_ind0,y_ind0,x_ind0,:] += w_lll*v
-            nodeU[z_ind1,y_ind0,x_ind0,:] += w_rll*v
-            nodeU[z_ind0,y_ind1,x_ind0,:] += w_lrl*v
-            nodeU[z_ind0,y_ind0,x_ind1,:] += w_llr*v
-            nodeU[z_ind1,y_ind1,x_ind0,:] += w_rrl*v
-            nodeU[z_ind1,y_ind0,x_ind1,:] += w_rlr*v
-            nodeU[z_ind0,y_ind1,x_ind1,:] += w_lrr*v
-            nodeU[z_ind1,y_ind1,x_ind1,:] += w_rrr*v
-            
-            node_w[z_ind0,y_ind0,x_ind0,:] += w_lll
-            node_w[z_ind1,y_ind0,x_ind0,:] += w_rll
-            node_w[z_ind0,y_ind1,x_ind0,:] += w_lrl
-            node_w[z_ind0,y_ind0,x_ind1,:] += w_llr
-            node_w[z_ind1,y_ind1,x_ind0,:] += w_rrl
-            node_w[z_ind1,y_ind0,x_ind1,:] += w_rlr
-            node_w[z_ind0,y_ind1,x_ind1,:] += w_lrr
-            node_w[z_ind1,y_ind1,x_ind1,:] += w_rrr
-
-      nodeU /= node_w
-      
-      return nodeU
-   
-   # def compute_rotated_current(self):
-   #    # Computes current due to B-rotation
-   #    # Current is stored at nodes to match E
-   #    # This requires an interpolation after accumulating to cells
-   #    cellJ = np.zeros(dims.dim_vector)
-   #    
-   #    for r,v,alpha in zip(self.r,self.v,self.alpha):
-   #       x_locs = np.round((r[0] - dims.x_min)/dims.dx).astype(int)
-   #       y_locs = np.round((r[1] - dims.y_min)/dims.dy).astype(int)
-   #       z_locs = np.round((r[2] - dims.z_min)/dims.dz).astype(int)
-   #       
-   #       if x_periodic:
-   #          x_locs = np.mod(x_locs, dims.x_size)
-   #       if y_periodic:
-   #          y_locs = np.mod(y_locs, dims.y_size)
-   #       if z_periodic:
-   #          z_locs = np.mod(z_locs, dims.z_size)
-   #       
-   #       x0 = (x_locs - 1 + 0.5)*dims.dx + dims.x_min
-   #       y0 = (y_locs - 1 + 0.5)*dims.dy + dims.y_min
-   #       z0 = (z_locs - 1 + 0.5)*dims.dz + dims.z_min
-   #       
-   #       x_w1 = (r[0] - x0)/dims.dx
-   #       y_w1 = (r[1] - y0)/dims.dy
-   #       z_w1 = (r[2] - z0)/dims.dz
-   #       
-   #       if x_periodic:
-   #          x_w1 = np.mod(x_w1, 1)
-   #       if y_periodic:
-   #          y_w1 = np.mod(y_w1, 1)
-   #       if z_periodic:
-   #          z_w1 = np.mod(z_w1, 1)
-   #       
-   #       x_w0 = 1 - x_w1
-   #       y_w0 = 1 - y_w1
-   #       z_w0 = 1 - z_w1
-   #       
-   #       x_ind0 = x_locs - 1
-   #       if x_periodic:
-   #          x_ind0 = np.mod(x_ind0, dims.x_size)
-   #       x_ind1 = x_locs
-   #       
-   #       y_ind0 = y_locs - 1
-   #       if y_periodic:
-   #          y_ind0 = np.mod(y_ind0, dims.y_size)
-   #       y_ind1 = y_locs
-   #       
-   #       z_ind0 = z_locs - 1
-   #       if z_periodic:
-   #          z_ind0 = np.mod(z_ind0, dims.z_size)
-   #       z_ind1 = z_locs
-   #       
-   #       if oneV is True:
-   #          alpha_v = alpha@v
-   #          
-   #          # (cell-centred) current density
-   #          cellJ[z_ind0,y_ind0,x_ind0,:] += x_w0*alpha_v
-   #          cellJ[z_ind0,y_ind0,x_ind1,:] += x_w1*alpha_v
-   #       else:
-   #          w_lll = x_w0 * y_w0 * z_w0
-   #          w_rll = x_w1 * y_w0 * z_w0
-   #          w_lrl = x_w0 * y_w1 * z_w0
-   #          w_llr = x_w0 * y_w0 * z_w1
-   #          w_rrl = x_w1 * y_w1 * z_w0
-   #          w_rlr = x_w1 * y_w0 * z_w1
-   #          w_lrr = x_w0 * y_w1 * z_w1
-   #          w_rrr = x_w1 * y_w1 * z_w1
-   #          
-   #          alpha_v = alpha@v
-   #          
-   #          # (cell-centred) current density
-   #          cellJ[z_ind0,y_ind0,x_ind0,:] += w_lll*alpha_v
-   #          cellJ[z_ind1,y_ind0,x_ind0,:] += w_rll*alpha_v
-   #          cellJ[z_ind0,y_ind1,x_ind0,:] += w_lrl*alpha_v
-   #          cellJ[z_ind0,y_ind0,x_ind1,:] += w_llr*alpha_v
-   #          cellJ[z_ind1,y_ind1,x_ind0,:] += w_rrl*alpha_v
-   #          cellJ[z_ind1,y_ind0,x_ind1,:] += w_rlr*alpha_v
-   #          cellJ[z_ind0,y_ind1,x_ind1,:] += w_lrr*alpha_v
-   #          cellJ[z_ind1,y_ind1,x_ind1,:] += w_rrr*alpha_v
-   #          
-   #    cellJ *= self.q*self.w/dims.vol
-   #    
-   #    nodeJ = cell2node(cellJ, period)
-   #    
-   #    return nodeJ
-
-   def compute_rotated_current(self):
-      # Computes current due to B-rotation
-      # Current is stored at nodes to match E
-      # This is accumulated directly to the nodes
-      nodeJ = np.zeros(dims.dim_vector)
-      
-      for r,v,alpha in zip(self.r,self.v,self.alpha):
-         x_locs = np.floor((r[0] - dims.x_min)/dims.dx).astype(int)
-         y_locs = np.floor((r[1] - dims.y_min)/dims.dy).astype(int)
-         z_locs = np.floor((r[2] - dims.z_min)/dims.dz).astype(int)
-         
-         x0 = x_locs*dims.dx + dims.x_min
-         y0 = y_locs*dims.dy + dims.y_min
-         z0 = z_locs*dims.dz + dims.z_min
-         
-         x_w1 = (r[0] - x0)/dims.dx
-         y_w1 = (r[1] - y0)/dims.dy
-         z_w1 = (r[2] - z0)/dims.dz
-         
-         x_w0 = 1 - x_w1
-         y_w0 = 1 - y_w1
-         z_w0 = 1 - z_w1
-         
-         x_ind0 = x_locs
-         x_ind1 = x_locs + 1
-         if x_periodic:
-            x_ind1 = np.mod(x_ind1, dims.x_size)
-         
-         y_ind0 = y_locs
-         y_ind1 = y_locs + 1
-         if y_periodic:
-            y_ind1 = np.mod(y_ind1, dims.y_size)
-         
-         z_ind0 = z_locs
-         z_ind1 = z_locs + 1
-         if z_periodic:
-            z_ind1 = np.mod(z_ind1, dims.z_size)
-         
-         if oneV is True:
-            alpha_v = alpha@v
-
-            # (cell-centred) current density
-            nodeJ[z_ind0,y_ind0,x_ind0,:] += x_w0*alpha_v
-            nodeJ[z_ind0,y_ind0,x_ind1,:] += x_w1*alpha_v
-         else:
-            w_lll = x_w0 * y_w0 * z_w0
-            w_rll = x_w1 * y_w0 * z_w0
-            w_lrl = x_w0 * y_w1 * z_w0
-            w_llr = x_w0 * y_w0 * z_w1
-            w_rrl = x_w1 * y_w1 * z_w0
-            w_rlr = x_w1 * y_w0 * z_w1
-            w_lrr = x_w0 * y_w1 * z_w1
-            w_rrr = x_w1 * y_w1 * z_w1
-            
-            alpha_v = alpha@v
-            
-            # (cell-centred) current density
-            nodeJ[z_ind0,y_ind0,x_ind0,:] += w_lll*alpha_v
-            nodeJ[z_ind1,y_ind0,x_ind0,:] += w_rll*alpha_v
-            nodeJ[z_ind0,y_ind1,x_ind0,:] += w_lrl*alpha_v
-            nodeJ[z_ind0,y_ind0,x_ind1,:] += w_llr*alpha_v
-            nodeJ[z_ind1,y_ind1,x_ind0,:] += w_rrl*alpha_v
-            nodeJ[z_ind1,y_ind0,x_ind1,:] += w_rlr*alpha_v
-            nodeJ[z_ind0,y_ind1,x_ind1,:] += w_lrr*alpha_v
-            nodeJ[z_ind1,y_ind1,x_ind1,:] += w_rrr*alpha_v
-
-      nodeJ *= self.q*self.w/dims.vol
-      
-      return nodeJ
-   
-   def compute_mass_matrices(self):
-      # Compute mass matrices
-      if oneV:
-         M = np.zeros((1,1,dims.Ncells_total,dims.Ncells_total))
-      else:
-         M = np.zeros((3,3,dims.Ncells_total,dims.Ncells_total))
-      
-      for r,alpha in zip(self.r,self.alpha):
-         x_locs = np.floor((r[0] - dims.x_min)/dims.dx).astype(int)
-         y_locs = np.floor((r[1] - dims.y_min)/dims.dy).astype(int)
-         z_locs = np.floor((r[2] - dims.z_min)/dims.dz).astype(int)
-
-         x0 = x_locs*dims.dx + dims.x_min
-         y0 = y_locs*dims.dy + dims.y_min
-         z0 = z_locs*dims.dz + dims.z_min
-         
-         x_w1 = (r[0] - x0)/dims.dx
-         y_w1 = (r[1] - y0)/dims.dy
-         z_w1 = (r[2] - z0)/dims.dz
-         
-         x_w0 = 1 - x_w1
-         y_w0 = 1 - y_w1
-         z_w0 = 1 - z_w1
-         
-         x_ind0 = x_locs
-         x_ind1 = x_locs + 1
-         if x_periodic:
-            x_ind1 = np.mod(x_ind1, dims.x_size)
-         
-         y_ind0 = y_locs
-         y_ind1 = y_locs + 1
-         if y_periodic:
-            y_ind1 = np.mod(y_ind1, dims.y_size)
-         
-         z_ind0 = z_locs
-         z_ind1 = z_locs + 1
-         if z_periodic:
-            z_ind1 = np.mod(z_ind1, dims.z_size)
-         
-         x_ind = (x_ind0, x_ind1)
-         y_ind = (y_ind0, y_ind1)
-         z_ind = (z_ind0, z_ind1)
-         
-         x_w = (x_w0,x_w1)
-         y_w = (y_w0,y_w1)
-         z_w = (z_w0,z_w1)
-
-         if oneV is True:
-            for xi,x_wi in zip(x_ind,x_w):
-               for xj,x_wj in zip(x_ind,x_w):
-                  M[0,0,xi,xj] += x_wi*x_wj * alpha[0,0]
-         else:
-            for xi,x_wi in zip(x_ind,x_w):
-               for xj,x_wj in zip(x_ind,x_w):
-                  for yi,y_wi in zip(y_ind,y_w):
-                     for yj,y_wj in zip(y_ind,y_w):
-                        for zi,z_wi in zip(z_ind,z_w):
-                           for zj,z_wj in zip(z_ind,z_w):
-                              for ii in range(3):
-                                 for jj in range(3):
-                                    M[ii,jj,(zi*dims.y_size + yi)*dims.x_size + xi,
-                                      (zj*dims.y_size + yj)*dims.x_size + xj] += x_wi*x_wj*y_wi*y_wj*z_wi*z_wj * alpha[ii,jj]
-      
-      beta = (self.q*dt)/(2*self.m)
-      M *= beta * self.q*self.w/dims.vol
-      
-      return M
-
-def apply_boundaries(data):
-   # Applies Neumann BCs to given data array
-   # All boundary types (cell,node,face) use the same method
-   # Data in outermost layer copied from nearest 'real' neighbour
-   # Periodic BCs has no boundary layer, so skip for periodic boundaries
-
-   if not x_periodic:
-      data[:,:,0,...] = data[:,:,1,...]
-      data[:,:,-1,...] = data[:,:,-2,...]
-   
-   if not y_periodic:
-      data[:,0,...] = data[:,1,...]
-      data[:,-1,...] = data[:,-1,...]
-   
-   if not z_periodic:
-      data[0,...] = data[1,...]
-      data[-1,...] = data[-2,...]
-   
-   return data
+   def step_time(self):
+      # Increment time and timestep
+      self.time += self.dt
+      self.timestep += 1
 
 def initialise_populations():
    # Initialise all particle populations
@@ -789,9 +286,10 @@ def initialise_populations():
    print("Initialising particle populations")
    pop_list = parse_multiarg_config(config, "simulation", "pop_list")
 
-   global pops
+   global pops,pops_njit
    
    pops = {}
+   # pops_njit = {}
    for pop_name in pop_list:
       electron = config.getboolean(pop_name, "electron", fallback = "no")
       mass = config.getfloat(pop_name, "mass", fallback = None)
@@ -809,51 +307,21 @@ def initialise_populations():
          mass = const.m_p/args.mass_ratio
       else:
          mass *= const.m_p
-
+      
       charge *= const.e
-      pops[pop_name] = Pop(pop_name, charge, mass, weight, electron, macros, temp, velocity)
-
-def initialise_fields():
-   # Initialise all fields
-   print("")
-   print("Initialising all fields")
-
-   global nodeJ,faceB,nodeE
-   
-   cellJp = np.sum([x.cellJi for x in pops.values()], axis = 0)
-
-   faceJp = cell2face_njit(cellJp, period)
-   
-   faceB = np.zeros(dims.dim_vector)
-   
-   B_types = parse_multiarg_config(config, "magnetic_field", "type")
-   Bx = config.getfloat("magnetic_field", "Bx")
-   if oneV is True:
-      By = Bz = 0
-   else:
-      By = config.getfloat("magnetic_field", "By")
-      Bz = config.getfloat("magnetic_field", "Bz")
-   for B_type in B_types:
-      if B_type == "uniform":
-         faceB[:,:,:,0] += Bx
-         faceB[:,:,:,1] += By
-         faceB[:,:,:,2] += Bz
-
-   nodeB = face2node_njit(faceB, period)
-   nodeUe = pops["e-"].nodeU()
-
-   nodeE = -np.cross(nodeUe, nodeB)
+      pops[pop_name] = Pop(pop_name, charge, mass, weight, electron, macros, rng, dims, temp, velocity)
+      # pops_njit[pop_name] = Pop_njit(charge, mass, weight, electron, macros, rng, dims, temp, velocity)
 
 def build_A(mass_matrices):
    # Construct sparse matrix A of Ax = b equation representing Maxwell's equations
-   if oneV:
+   if dims.oneV:
       A = np.zeros((2*dims.Ncells_total,2*dims.Ncells_total))
-      A[0:dims.Ncells_total,dims.Ncells_total:2*dims.Ncells_total] -= const.mu_0*theta*mass_matrices[0,0]
+      A[0:dims.Ncells_total,dims.Ncells_total:2*dims.Ncells_total] -= const.mu_0*dims.theta*mass_matrices[0,0]
       for ii in range(dims.Ncells_total):
-         A[ii,ii + dims.Ncells_total] -= 1/(const.c**2*dt)
+         A[ii,ii + dims.Ncells_total] -= 1/(const.c**2*dims.dt)
       
       for ii in range(dims.Ncells_total):
-         A[ii + dims.Ncells_total,ii] += 1/dt
+         A[ii + dims.Ncells_total,ii] += 1/dims.dt
    else:
       A = np.zeros((6*dims.Ncells_total,6*dims.Ncells_total))
       
@@ -875,11 +343,11 @@ def build_b(faceB,nodeE,nodeJ_hat,mass_matrices):
    Jy = Jy.flatten()
    Jz = Jz.flatten()
    
-   if oneV:
+   if dims.oneV:
       b = np.zeros(2*dims.Ncells_total)
-      b[:dims.Ncells_total] += -1/(const.c**2*dt)*Ex+const.mu_0*Jx+const.mu_0*(1-theta)*mass_matrices[0,0]@Ex
+      b[:dims.Ncells_total] += -1/(const.c**2*dims.dt)*Ex+const.mu_0*Jx+const.mu_0*(1-dims.theta)*mass_matrices[0,0]@Ex
       
-      b[dims.Ncells_total:] += 1/dt*Bx
+      b[dims.Ncells_total:] += 1/dims.dt*Bx
    else:
       b = np.zeros(6*dims.Ncells_total)
    
@@ -888,72 +356,225 @@ def build_b(faceB,nodeE,nodeJ_hat,mass_matrices):
 def test_interpolators():
    # Test interpolation methods
    Np = 10
-   r = rng.uniform((dims.x_min,dims.y_min,dims.z_min), (dims.x_max,dims.y_max,z_max), (Np,3))
+   r = rng.uniform((dims.x_min,dims.y_min,dims.z_min), (dims.x_max,dims.y_max,dims.z_max), (Np,3))
+
+   dims_n = Dims(*dims.copy())
+   dims_n.linear = False
    
-   cell_s = np.array(range(dims.Ncells_total), dtype = float).reshape(dims.dim_scalar)
-   cell_v = np.array(range(dims.Ncells_total*3), dtype = float).reshape(dims.dim_vector)
-
-   # cell_s = rng.uniform(-1, 1, dims.dim_scalar)
-   # cell_v = rng.uniform(-1, 1, dims.dim_vector)
+   # cell_s = np.array(range(dims.Ncells_total), dtype = np.float64).reshape(dims.dim_scalar)
+   # cell_v = np.array(range(dims.Ncells_total*3), dtype = np.float64).reshape(dims.dim_vector)
    
-   cell_to_face = cell2face(cell_v, period)
-   cell_to_node_s = cell2node(cell_s, period)
-   cell_to_node_v = cell2node(cell_v, period)
-   cell_to_r_s = cell2r(cell_s, r, period, dims)
-   cell_to_r_v = cell2r(cell_v, r, period, dims)
+   cell_s = rng.uniform(-1, 1, dims.dim_scalar)
+   cell_v = rng.uniform(-1, 1, dims.dim_vector)
 
-   cell_to_face_njit = cell2face_njit(cell_v, period)
-   cell_to_node_s_njit = cell2node_njit(cell_s, period)
-   cell_to_node_v_njit = cell2node_njit(cell_v, period)
-   cell_to_r_s_njit = cell2r_njit(cell_s, r, period, dims)
-   cell_to_r_v_njit = cell2r_njit(cell_v, r, period, dims)
-
-   node_s = np.array(range(dims.Ncells_total), dtype = float).reshape(dims.dim_scalar)
-   node_v = np.array(range(dims.Ncells_total*3), dtype = float).reshape(dims.dim_vector)
-
-   # node_s = rng.uniform(-1, 1, dims.dim_scalar)
-   # node_v = rng.uniform(-1, 1, dims.dim_vector)
+   cell_to_face = cell2face(cell_v, dims)
+   cell_to_node_s = cell2node(cell_s, dims)
+   cell_to_node_v = cell2node(cell_v, dims)
+   cell_to_r_s_l = cell2r(cell_s, r, dims)
+   cell_to_r_v_l = cell2r(cell_v, r, dims)
+   cell_to_r_s_n = cell2r(cell_s, r, dims_n)
+   cell_to_r_v_n = cell2r(cell_v, r, dims_n)
    
-   node_to_face = node2face(node_v, period)
-   node_to_cell_s = node2cell(node_s, period)
-   node_to_cell_v = node2cell(node_v, period)
-   node_to_r_s = node2r(node_s, r, period, dims)
-   node_to_r_v = node2r(node_v, r, period, dims)
+   cell_to_face_njit = cell2face_njit(cell_v, dims)
+   cell_to_node_s_njit = cell2node_njit(cell_s, dims)
+   cell_to_node_v_njit = cell2node_njit(cell_v, dims)
+   cell_to_r_s_l_njit = cell2r_njit(cell_s, r, dims)
+   cell_to_r_v_l_njit = cell2r_njit(cell_v, r, dims)
+   cell_to_r_s_n_njit = cell2r_njit(cell_s, r, dims_n)
+   cell_to_r_v_n_njit = cell2r_njit(cell_v, r, dims_n)
 
-   node_to_face_njit = node2face_njit(node_v, period)
-   node_to_cell_s_njit = node2cell_njit(node_s, period)
-   node_to_cell_v_njit = node2cell_njit(node_v, period)
-   node_to_r_s_njit = node2r_njit(node_s, r, period, dims)
-   node_to_r_v_njit = node2r_njit(node_v, r, period, dims)
+   # node_s = np.array(range(dims.Ncells_total), dtype = float).reshape(dims.dim_scalar)
+   # node_v = np.array(range(dims.Ncells_total*3), dtype = float).reshape(dims.dim_vector)
 
-   face = np.array(range(dims.Ncells_total*3), dtype = float).reshape(dims.dim_vector)
+   node_s = rng.uniform(-1, 1, dims.dim_scalar)
+   node_v = rng.uniform(-1, 1, dims.dim_vector)
    
-   # face = rng.uniform(-1, 1, dims.dim_vector)
+   node_to_face = node2face(node_v, dims)
+   node_to_cell_s = node2cell(node_s, dims)
+   node_to_cell_v = node2cell(node_v, dims)
+   node_to_r_s_l = node2r(node_s, r, dims)
+   node_to_r_v_l = node2r(node_v, r, dims)
+   node_to_r_s_n = node2r(node_s, r, dims_n)
+   node_to_r_v_n = node2r(node_v, r, dims_n)
+   
+   node_to_face_njit = node2face_njit(node_v, dims)
+   node_to_cell_s_njit = node2cell_njit(node_s, dims)
+   node_to_cell_v_njit = node2cell_njit(node_v, dims)
+   node_to_r_s_l_njit = node2r_njit(node_s, r, dims)
+   node_to_r_v_l_njit = node2r_njit(node_v, r, dims)
+   node_to_r_s_n_njit = node2r_njit(node_s, r, dims_n)
+   node_to_r_v_n_njit = node2r_njit(node_v, r, dims_n)
+   
+   # face = np.array(range(dims.Ncells_total*3), dtype = float).reshape(dims.dim_vector)
+   
+   face = rng.uniform(-1, 1, dims.dim_vector)
 
-   face_to_cell = face2cell(face, period)
-   face_to_node = face2node(face, period)
-   face_to_r = face2r(face, r, period, dims)
+   face_to_cell = face2cell(face, dims)
+   face_to_node = face2node(face, dims)
+   face_to_r = face2r(face, r, dims)
 
-   face_to_cell_njit = face2cell_njit(face, period)
-   face_to_node_njit = face2node_njit(face, period)
-   face_to_r_njit = face2r_njit(face, r, period, dims)
+   face_to_cell_njit = face2cell_njit(face, dims)
+   face_to_node_njit = face2node_njit(face, dims)
+   face_to_r_njit = face2r_njit(face, r, dims)
 
    compare("cell2face:        ", cell_to_face, cell_to_face_njit)
    compare("cell2node scalar: ", cell_to_node_s, cell_to_node_s_njit)
    compare("cell2node vector: ", cell_to_node_v, cell_to_node_v_njit)
-   compare("cell2r scalar:    ", cell_to_r_s, cell_to_r_s_njit)
-   compare("cell2r vector:    ", cell_to_r_v, cell_to_r_v_njit)
+   compare("cell2r scalar:    ", cell_to_r_s_l, cell_to_r_s_l_njit)
+   compare("cell2r vector:    ", cell_to_r_v_l, cell_to_r_v_l_njit)
+   compare("cell2r scalar:    ", cell_to_r_s_n, cell_to_r_s_n_njit)
+   compare("cell2r vector:    ", cell_to_r_v_n, cell_to_r_v_n_njit)
 
    compare("node2face:        ", node_to_face, node_to_face_njit)
    compare("node2cell scalar: ", node_to_cell_s, node_to_cell_s_njit)
    compare("node2cell vector: ", node_to_cell_v, node_to_cell_v_njit)
-   compare("node2r scalar:    ", node_to_r_s, node_to_r_s_njit)
-   compare("node2r vector:    ", node_to_r_v, node_to_r_v_njit)
+   compare("node2r scalar:    ", node_to_r_s_l, node_to_r_s_l_njit)
+   compare("node2r vector:    ", node_to_r_v_l, node_to_r_v_l_njit)
+   compare("node2r scalar:    ", node_to_r_s_n, node_to_r_s_n_njit)
+   compare("node2r vector:    ", node_to_r_v_n, node_to_r_v_n_njit)
 
    compare("face2cell:        ", face_to_cell, face_to_cell_njit)
    compare("face2node:        ", face_to_node, face_to_node_njit)
    compare("face2r:           ", face_to_r, face_to_r_njit)
 
+   print("")
+   
+   interp_timers = my_timers()
+   interp_timers_njit = my_timers()
+   tests = [
+      ("c2f",     cell2face, cell2face_njit, "vector", None),
+      ("c2n_s",   cell2node, cell2node_njit, "scalar", None),
+      ("c2n_v",   cell2node, cell2node_njit, "vector", None),
+      ("c2r_s_l", cell2r,    cell2r_njit,    "scalar", True),
+      ("c2r_v_l", cell2r,    cell2r_njit,    "vector", True),
+      ("c2r_s_n", cell2r,    cell2r_njit,    "scalar", False),
+      ("c2r_v_n", cell2r,    cell2r_njit,    "vector", False),
+      ("n2f",     node2face, node2face_njit, "vector", None),
+      ("n2c_s",   node2cell, node2cell_njit, "scalar", None),
+      ("n2c_v",   node2cell, node2cell_njit, "vector", None),
+      ("n2r_s_l", node2r,    node2r_njit,    "scalar", True),
+      ("n2r_v_l", node2r,    node2r_njit,    "vector", True),
+      ("n2r_s_n", node2r,    node2r_njit,    "scalar", False),
+      ("n2r_v_n", node2r,    node2r_njit,    "vector", False),
+      ("f2c",     face2cell, face2cell_njit, "vector", None),
+      ("f2n",     face2node, face2node_njit, "vector", None),
+      ("f2r_l",   face2r,    face2r_njit,    "vector", True),
+      ("f2r_n",   face2r,    face2r_njit,    "vector", False)
+   ]
+
+   for timer_name,*_ in tests:
+      interp_timers.start(timer_name)
+      interp_timers_njit.start(timer_name)
+
+   loops = 100
+   
+   Np_test = 100
+   
+   x_min_test = -1
+   x_max_test = 1
+   y_min_test = -1
+   y_max_test = 1
+   z_min_test = -1
+   z_max_test = 1
+
+   x_size_test = 10
+   y_size_test = 10
+   z_size_test = 10
+
+   x_periodic_test = True
+   y_periodic_test = True
+   z_periodic_test = True
+   
+   lims = ((x_min_test,x_max_test),(y_min_test,y_max_test),(z_min_test,z_max_test))
+   sizes = (x_size_test,y_size_test,z_size_test)
+   period = (z_periodic_test, y_periodic_test, x_periodic_test, True)
+
+   oneV = True
+   
+   test_dims = Dims(lims, dt, dims.theta, sizes, period, True, oneV)
+   test_dims_n = Dims(*test_dims.copy())
+   test_dims_n.linear = False
+   
+   dim_s = (10,10,10)
+   dim_v = (10,10,10,3)
+   
+   for name,function,function_njit,array_type,linear in tests:
+      for ii in range(loops):
+         if array_type == "scalar":
+            array_dim = test_dims.dim_scalar
+         elif array_type == "vector":
+            array_dim = test_dims.dim_vector
+         array = rng.uniform(-1, 1, array_dim)
+
+         if function.__name__.endswith("r"):
+            r = rng.uniform((test_dims.x_min,test_dims.y_min,test_dims.z_min), (test_dims.x_max,test_dims.y_max,test_dims.z_max), (Np_test,3))
+            if function.__name__.startswith("face"):
+               interp_timers.tic(name)
+               res = function(array, r, test_dims)
+               interp_timers.toc(name)
+
+               interp_timers_njit.tic(name)
+               res_njit = function_njit(array, r, test_dims)
+               interp_timers_njit.toc(name)
+            else:
+               if linear:
+                  interp_timers.tic(name)
+                  res = function(array, r, test_dims)
+                  interp_timers.toc(name)
+                  
+                  interp_timers_njit.tic(name)
+                  res_njit = function_njit(array, r, test_dims)
+                  interp_timers_njit.toc(name)
+               else:
+                  interp_timers.tic(name)
+                  res = function(array, r, test_dims_n)
+                  interp_timers.toc(name)
+                  
+                  interp_timers_njit.tic(name)
+                  res_njit = function_njit(array, r, test_dims_n)
+                  interp_timers_njit.toc(name)
+         else:
+            interp_timers.tic(name)
+            res = function(array, test_dims)
+            interp_timers.toc(name)
+            
+            interp_timers_njit.tic(name)
+            res_njit = function_njit(array, test_dims)
+            interp_timers_njit.toc(name)
+      
+      print_string = function.__name__
+      print_string_njit = function_njit.__name__
+      if not function.__name__.endswith("face"):
+         print_string += " " + array_type
+         print_string_njit += " " + array_type
+      if function.__name__.endswith("r"):
+         if linear:
+            print_string += " linear"
+            print_string_njit += " linear"
+         else:
+            print_string += " non-linear"
+            print_string_njit += " non-linear"
+
+      print_ratio = print_string + " ratio:"
+            
+      print_string += ": "
+      print_string_njit += ": "
+      
+      print_ratio = print_ratio.ljust(32)
+      print_string = print_string.ljust(32)
+      print_string_njit = print_string_njit.ljust(32)
+
+      print_string += str(interp_timers.timers[name])
+      print_string_njit += str(interp_timers_njit.timers[name])
+      print_ratio += str(interp_timers.timers[name] / interp_timers_njit.timers[name])
+      
+      print(print_string)
+      print(print_string_njit)
+      print(print_ratio)
+      print("")
+
+   exit()
+      
 def compare(name, first, second):
    test = all(first.flat == second.flat)
 
@@ -961,7 +582,6 @@ def compare(name, first, second):
    
 def cap_dt(pops):
    # Restrict dt if necessary, or expand
-   global dt
    maxV = 0.0
    for pop in pops.values():
       maxV = max(maxV, np.linalg.norm(pop.v, axis = 1).max())
@@ -971,9 +591,9 @@ def cap_dt(pops):
       print("WARNING: maximum particle motion for given particle velocity exceeded, shrinking time step accordingly")
 
    if maxV > 0:
-      dt = min(dt, dims.dx/maxV*dt_cap)
+      dims.dt = min(args.dt, dims.dx/maxV*dt_cap)
    else:
-      dt = args.dt
+      dims.dt = args.dt
    
 args,config = readConfig(args.config, args)
 
@@ -1058,95 +678,132 @@ if not z_periodic:
    z_min -= dz
    z_max += dz
 
+lims = ((x_min,x_max),(y_min,y_max),(z_min,z_max))
+sizes = (x_size,y_size,z_size)
 period = (z_periodic, y_periodic, x_periodic, True)
 
-lims = ((x_min,x_max),(y_min,y_max),(z_min,z_max))
-spacing = (dx,dy,dz)
-sizes = (x_size,y_size,z_size)
+dims = Dims(lims, dt, theta, sizes, period, config.getboolean("main", "use_nonlinear_r_interpolation", fallback = False), oneV)
 
-dims = Dims(lims, spacing, sizes)
-
-test_interpolators()
+# test_interpolators()
 
 timers = my_timers()
+
+timer_list = [
+   'init',
+   'alpha',
+   'current',
+   'mass matrices',
+   'maxwell',
+   'build A',
+   'build b',
+   'gmres',
+   'locs',
+   'field solver',
+   'lorentz',
+   'extra',
+   'output',
+   'total'
+]
+
+for timer_name in timer_list:
+   timers.start(timer_name)
+
 timers.tic("total")
 timers.tic("init")
 
 initialise_populations()
 
-initialise_fields()
+B_types = parse_multiarg_config(config, "magnetic_field", "type")
+
+B_init = (
+   config.getfloat("magnetic_field", "Bx"),
+   config.getfloat("magnetic_field", "By"),
+   config.getfloat("magnetic_field", "Bz")
+)
+
+fields = Fields(pops, B_types, B_init, dims)
 
 cap_dt(pops)
 
-for pop in pops.values():
+for name,pop in pops.items():
    print("")
-   print("Uncentering particles of population " + pop.name)
-   pop.moveParticles(-dt/2)
+   print("Uncentering particles of population " + name)
+   moveParticles(pop, -dims.dt/2, dims)
 
 tmp_r = pops["e-"].r.copy()
 tmp_v = pops["e-"].v.copy()
    
 timers.toc("init")
 
+if os.path.isfile(args.out_dir + "/fields.h5") or os.path.isfile(args.out_dir + "/pops.h5"):
+   print("Output files already exist, aborting")
+   sys.exit()
+
+save_data(args.out_dir, fields, pops, dims)
+
 for jj in range(args.steps):
    print("")
    print("Starting time step " + str(jj + 1))
    
-   timers.tic("mover")
+   timers.tic("locs")
    
    print("")
    print("Moving particles")
    for pop in pops.values():
-      pop.moveParticles(dt)
+      moveParticles(pop, dims.dt, dims)
 
-   timers.toc("mover")
+   timers.toc("locs")
    timers.tic("alpha")
-      
+   timers.tic("field solver")
+   
    print("Calculating alpha \"rotation\" matrices")
    for pop in pops.values():
-      pop.compute_alpha(faceB)
-
+      compute_alpha(pop, fields.faceB, dims)
+   
    timers.toc("alpha")
    timers.tic("current")
       
    print("Computing rotated current")
-   nodeJ_hat = np.zeros(dims.dim_vector)
    for pop in pops.values():
-      nodeJ_hat += pop.compute_rotated_current()
-
+      fields.nodeJ_hat += compute_rotated_current(pop, dims)
+   
    timers.toc("current")
    timers.tic("mass matrices")
-      
+   
    print("Computing mass matrices")
-   if oneV:
+   if dims.oneV:
       mass_matrices = np.zeros((1,1,dims.Ncells_total,dims.Ncells_total))
    else:
       mass_matrices = np.zeros((3,3,dims.Ncells_total,dims.Ncells_total))
    
    for pop in pops.values():
-      mass_matrices += pop.compute_mass_matrices()
-
+      mass_matrices += compute_mass_matrices(pop, dims)
+   
    timers.toc("mass matrices")
    timers.tic("maxwell")
 
    print("Solving Maxwell's equations")
+
    timers.tic("build A")
+   
    A = build_A(mass_matrices)
+
    timers.toc("build A")
-   
    timers.tic("build b")
-   b = build_b(faceB, nodeE, nodeJ_hat, mass_matrices)
+
+   b = build_b(fields.faceB, fields.nodeE, fields.nodeJ_hat, mass_matrices)
+
    timers.toc("build b")
-   
    timers.tic("gmres")
+
    info = 1
    rtol = args.rtol
    atol = args.atol
    
-   if oneV:
-      x0 = np.concatenate((faceB[:,:,:,0].flat,nodeE[:,:,:,0].flat))
+   if dims.oneV:
+      x0 = np.concatenate((fields.faceB[:,:,:,0].flat,fields.nodeE[:,:,:,0].flat))
    else:
-      x0 = np.concatenate((faceB.flat,nodeE.flat))
+      x0 = np.concatenate((fields.faceB.flat,fields.nodeE.flat))
    
    while info > 0 and rtol < 1e-2 and atol < 1e-2:
       xnext,info = gmres(A, b, rtol = rtol, atol = atol, x0 = x0)
@@ -1160,34 +817,43 @@ for jj in range(args.steps):
    elif info > 0:
       sys.stderr.write("Did not convergence in timestep " + str(jj) + "\n")
       sys.exit(1)
+
    timers.toc("gmres")
    
-   newFaceB = faceB.copy()
-   newNodeE = nodeE.copy()
+   fields,midNodeE = upwind_fields(fields, xnext, dims)
 
-   if oneV:
-      newFaceB[:,:,:,0] = xnext[:dims.Ncells_total].reshape(dims.dim_scalar)
-      newNodeE[:,:,:,0] = xnext[dims.Ncells_total:].reshape(dims.dim_scalar)
-   
-   midNodeE = theta*newNodeE + (1-theta)*nodeE
-
-   nodeE = newNodeE
-   faceB = newFaceB
-   
    timers.toc("maxwell")
-
+   timers.toc("field solver")
    timers.tic("lorentz")
-
+   
    for pop in pops.values():
-      pop.Lorentz(midNodeE)
-
+      Lorentz(pop, midNodeE, dims)
+      # pop.v = Lorentz_njit(pop.r, pop.v, pop.alpha, pop.q, pop.m, midNodeE, dims)
+   
    timers.toc("lorentz")
+   timers.tic("extra")
+   
+   for pop in pops.values():
+      # accumulators(pop, dims)
+      calcNodeData(pop, dims)
+   # fields.update_fields(pops, dims)
+   
+   timers.toc("extra")
+
+   # Increment time
+   dims.step_time()
+   
+   timers.tic("output")
+
+   save_data(args.out_dir, fields, pops, dims)
+
+   timers.toc("output")
 
 timers.toc("total")
    
 print("Total time:           " + str(timers.timers["total"]))
 print("Initialisation:       " + str(timers.timers["init"]))
-print("Particle Mover:       " + str(timers.timers["mover"]))
+print("Particle locs update: " + str(timers.timers["locs"]))
 print("Alpha Computation:    " + str(timers.timers["alpha"]))
 print("Current Accumulation: " + str(timers.timers["current"]))
 print("Mass Matrices:        " + str(timers.timers["mass matrices"]))
@@ -1196,6 +862,10 @@ print("   build A:           " + str(timers.timers["build A"]))
 print("   build b:           " + str(timers.timers["build b"]))
 print("   gmres:             " + str(timers.timers["gmres"]))
 print("Lorentz Force update: " + str(timers.timers["lorentz"]))
+print("Unused fields update: " + str(timers.timers["extra"]))
+print("Field Solver:         " + str(timers.timers["field solver"]))
+print("Particle Mover:       " + str(timers.timers["locs"] + timers.timers["lorentz"]))
+print("Data saving:          " + str(timers.timers["output"]))
 
 tmp2 = pops["e-"].v - tmp_v
 

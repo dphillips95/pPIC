@@ -1,5 +1,7 @@
+# Module of general tools, e.g. array rolling/sliding
+
 import numpy as np
-from numba import njit
+from numba import njit,int64
 
 def split_axis(arr, axis, keep_dim = False):
    # Splits numpy array along axis into one array per axis index
@@ -19,8 +21,14 @@ def split_axis(arr, axis, keep_dim = False):
    
    return split_arr
 
-@njit(cache = True)
 def shift_indices(arr, shift, periodicity):
+   # Shift 1D array of indices
+   if periodicity is True:
+      return np.roll(arr, shift)
+   return shift_indices_njit(arr, shift, periodicity)
+
+@njit(cache = True, fastmath = True)
+def shift_indices_njit(arr, shift, periodicity):
    # Shift 1D array of indices
    if periodicity is True:
       return np.roll(arr, shift)
@@ -40,7 +48,7 @@ def shift_indices(arr, shift, periodicity):
    
    return sh_arr
 
-@njit(cache = True)
+@njit(cache = True, fastmath = True)
 def arr_shift_multi(arr, shift, axis, periodicity):
    # Calls arr_shift for each axis
    # Shift must be a tuple of same length as axis
@@ -50,7 +58,6 @@ def arr_shift_multi(arr, shift, axis, periodicity):
 
    return sh_arr
 
-@njit(cache = True)
 def arr_shift(arr, shift, axis, periodicity):
    # Shift array, if axis is periodic then rolls otherwise uses array_indices
    # periodicity is iterable of bools of length arr.ndim that encodes if each axis is periodic
@@ -58,14 +65,27 @@ def arr_shift(arr, shift, axis, periodicity):
    if shift == 0:
       return arr
    if periodicity[axis]:
-      # sh_arr = np.roll(sh_arr, shift, axis)
+      sh_arr = np.roll(arr, shift, axis)
+   else:
+      sh_arr = slide_array(arr, shift, axis)
+   
+   return sh_arr
+
+@njit(cache = True, fastmath = True)
+def arr_shift_njit(arr, shift, axis, periodicity):
+   # Shift array, if axis is periodic then rolls otherwise uses array_indices
+   # periodicity is iterable of bools of length arr.ndim that encodes if each axis is periodic
+   # i.e. the same as np.roll, but does not wrap if not periodic
+   if shift == 0:
+      return arr
+   if periodicity[axis]:
       sh_arr = roll_array(arr, shift, axis)
    else:
       sh_arr = slide_array(arr, shift, axis)
    
    return sh_arr
 
-@njit(cache = True)
+@njit(cache = True, fastmath = True)
 def slide_array(arr, shift, axis):
    # Shift array without rolling (new elements become equal to known neighbour)
    ndim = arr.ndim
@@ -82,7 +102,7 @@ def slide_array(arr, shift, axis):
       
    return sh_arr
 
-@njit(cache = True)
+@njit(cache = True, fastmath = True)
 def shift_1D(arr, shift):
    # Shift 1D array
    shape = arr.shape
@@ -100,7 +120,7 @@ def shift_1D(arr, shift):
          
    return sh_arr
 
-@njit(cache = True)
+@njit(cache = True, fastmath = True)
 def shift_2D(arr, shift, axis):
    # Shift 2D array
    shape = arr.shape
@@ -136,7 +156,7 @@ def shift_2D(arr, shift, axis):
    
    return sh_arr
 
-@njit(cache = True)
+@njit(cache = True, fastmath = True)
 def shift_3D(arr, shift, axis):
    # Shift 3D array
    shape = arr.shape
@@ -194,7 +214,7 @@ def shift_3D(arr, shift, axis):
 
    return sh_arr
 
-@njit(cache = True)
+@njit(cache = True, fastmath = True)
 def shift_4D(arr, shift, axis):
    # Shift 4D array
    shape = arr.shape
@@ -280,7 +300,7 @@ def shift_4D(arr, shift, axis):
    
    return sh_arr
 
-@njit(cache = True)
+@njit(cache = True, fastmath = True)
 def roll_array(arr, shift, axis):
    # Roll super-function that selects correct version of roll for given array dimensions
    ndim = arr.ndim
@@ -295,7 +315,7 @@ def roll_array(arr, shift, axis):
 
    return sh_arr
 
-@njit(cache = True)
+@njit(cache = True, fastmath = True)
 def roll_2D(arr, shift, axis):
    # numba-friendly array axis rolling for 2D data
    shape = arr.shape
@@ -311,7 +331,7 @@ def roll_2D(arr, shift, axis):
    
    return sh_arr
 
-@njit(cache = True)
+@njit(cache = True, fastmath = True)
 def roll_3D(arr, shift, axis):
    # numba-friendly array axis rolling for 3D data
    shape = arr.shape
@@ -335,7 +355,7 @@ def roll_3D(arr, shift, axis):
    
    return sh_arr
 
-@njit(cache = True)
+@njit(cache = True, fastmath = True)
 def roll_4D(arr, shift, axis):
    # numba-friendly array axis rolling for 4D data
    shape = arr.shape
@@ -368,3 +388,23 @@ def roll_4D(arr, shift, axis):
                   sh_arr[kk,jj,ii,nn] = tmp[nn]      
    
    return sh_arr
+
+@njit(cache = True, fastmath = True)
+def numba_unravel_index(index, dims):
+   # Equivalent of np.unravel_index, compatible with numba
+   ndim = len(dims)
+   if ndim == 2:
+      xi = index % dims[1]
+      yi = index // dims[1]
+      return np.array([yi,xi], dtype = int64)
+   elif ndim == 3:
+      xi = index % dims[2]
+      yi = (index // dims[2]) % dims[1]
+      zi = index // (dims[1] * dims[2])
+      return np.array([zi,yi,xi], dtype = int64)
+   elif ndim == 4:
+      xi = index % dims[3]
+      yi = (index // dims[3]) % dims[2]
+      zi = (index // (dims[2] * dims[3])) % dims[1]
+      wi = index // (dims[1] * dims[2] * dims[3])
+      return np.array([wi,zi,yi,xi], dtype = int64)
