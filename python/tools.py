@@ -423,3 +423,122 @@ def floatToStr(value, decimals = 0, pad = None):
       formatter += str(total)
    formatter += "." + str(decimals) + "f}"
    return formatter.format(value)
+
+def CIC_weights_node(r, dims, reshape = True, fraction = True):
+   # Calculate CIC weights and interpolation nodes for given population
+   # CIC weight is fractional volume of particle cloud intersecting
+   # with each given node 'volume'
+   # here volume means cell-sized box centred on node
+   # Assumes grid is node (or face)
+   # If reshape is True then reshapes x_w etc. so that x_w*y_w*z_w works
+   # If fraction is True then x_w etc. returned as fraction of distance
+   # between points, else returns real distance from point
+   x_ind0 = np.floor((r[:,0] - dims.x_min)/dims.dx).astype(int)
+   y_ind0 = np.floor((r[:,1] - dims.y_min)/dims.dy).astype(int)
+   z_ind0 = np.floor((r[:,2] - dims.z_min)/dims.dz).astype(int)
+
+   x0 = x_ind0*dims.dx + dims.x_min
+   y0 = y_ind0*dims.dy + dims.y_min
+   z0 = z_ind0*dims.dz + dims.z_min
+
+   if fraction:
+      x_w1 = (r[:,0] - x0)/dims.dx
+      y_w1 = (r[:,1] - y0)/dims.dy
+      z_w1 = (r[:,2] - z0)/dims.dz
+      
+      x_w0 = 1 - x_w1
+      y_w0 = 1 - y_w1
+      z_w0 = 1 - z_w1
+   else:
+      x_w1 = (r[:,0] - x0)/dims.dx
+      y_w1 = (r[:,1] - y0)/dims.dy
+      z_w1 = (r[:,2] - z0)/dims.dz
+      
+      x_w0 = 1 - x_w1
+      y_w0 = 1 - y_w1
+      z_w0 = 1 - z_w1
+   
+   x_ind1 = dims.x_range_l2r[x_ind0]
+   y_ind1 = dims.y_range_l2r[y_ind0]
+   z_ind1 = dims.z_range_l2r[z_ind0]
+   
+   x_ind = np.array((x_ind0,x_ind1))
+   y_ind = np.array((y_ind0,y_ind1))
+   z_ind = np.array((z_ind0,z_ind1))
+
+   x_w = np.array((x_w0,x_w1))
+   y_w = np.array((y_w0,y_w1))
+   z_w = np.array((z_w0,z_w1))
+   
+   if reshape:
+      x_w = x_w.reshape(1,1,2,-1)
+      y_w = y_w.reshape(1,2,1,-1)
+      z_w = z_w.reshape(2,1,1,-1)
+
+   return (x_ind,y_ind,z_ind),(x_w,y_w,z_w)
+
+def CIC_weights_cell(r, dims, reshape = True, fraction = True):
+   # Calculate CIC weights and interpolation cells for given population
+   # CIC weight is fractional volume of particle cloud intersecting
+   # with each given cell volume
+   # Assumes grid is cell
+   # If reshape is True then reshapes x_w etc. so that x_w*y_w*z_w works
+   # If fraction is True then x_w etc. returned as fraction of distance
+   # between points, else returns real distance from point
+   x_ind1 = np.round((r[:,0] - dims.x_min)/dims.dx).astype(int)
+   y_ind1 = np.round((r[:,1] - dims.y_min)/dims.dy).astype(int)
+   z_ind1 = np.round((r[:,2] - dims.z_min)/dims.dz).astype(int)
+
+   x0 = (x_ind1 - 1 + 0.5)*dims.dx + dims.x_min
+   y0 = (y_ind1 - 1 + 0.5)*dims.dy + dims.y_min
+   z0 = (z_ind1 - 1 + 0.5)*dims.dz + dims.z_min
+   if fraction:
+      x_w1 = (r[:,0] - x0)/dims.dx
+      y_w1 = (r[:,1] - y0)/dims.dy
+      z_w1 = (r[:,2] - z0)/dims.dz
+      
+      x_w0 = 1 - x_w1
+      y_w0 = 1 - y_w1
+      z_w0 = 1 - z_w1
+   else:
+      x_w1 = r[:,0] - x0
+      y_w1 = r[:,1] - y0
+      z_w1 = r[:,2] - z0
+      
+      x_w0 = dims.dx - x_w1
+      y_w0 = dims.dy - y_w1
+      z_w0 = dims.dz - z_w1
+
+   x_ind0 = x_ind1 - 1
+   y_ind0 = y_ind1 - 1
+   z_ind0 = z_ind1 - 1
+
+   x_ind = np.array((x_ind0,x_ind1))
+   y_ind = np.array((y_ind0,y_ind1))
+   z_ind = np.array((z_ind0,z_ind1))
+
+   if dims.period[2]:
+      x_ind = np.mod(x_ind, dims.x_size)
+   else:
+      x_ind = np.clip(x_ind, 0, dims.x_size - 1)
+   
+   if dims.period[1]:
+      y_ind = np.mod(y_ind, dims.y_size)
+   else:
+      y_ind = np.clip(y_ind, 0, dims.y_size - 1)
+   
+   if dims.period[0]:
+      z_ind = np.mod(z_ind, dims.z_size)
+   else:
+      z_ind = np.clip(z_ind, 0, dims.z_size - 1)
+   
+   x_w = np.array((x_w0,x_w1))
+   y_w = np.array((y_w0,y_w1))
+   z_w = np.array((z_w0,z_w1))
+   
+   if reshape:
+      x_w = x_w.reshape(1,1,2,-1)
+      y_w = y_w.reshape(1,2,1,-1)
+      z_w = z_w.reshape(2,1,1,-1)
+   
+   return (x_ind,y_ind,z_ind),(x_w,y_w,z_w)

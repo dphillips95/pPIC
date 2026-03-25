@@ -158,9 +158,13 @@ def calcDiagnostics(fields, pops, dims):
 
    logs["total_energy"] = logs["energy_B"] + logs["energy_E"]
 
-   cellRhoQ,cellJ = zip(*((pop.cellRhoQ,pop.cellJi) for pop in pops.values()))
-   cellRhoQ = np.array(cellRhoQ).sum(axis = 0)
-   cellJ = np.array(cellJ).sum(axis = 0)
+   if len(pops) == 0:
+      cellRhoQ = np.zeros(dims.dim_scalar)
+      cellJ = np.zeros(dims.dim_vector)
+   else:
+      cellRhoQ,cellJ = zip(*((pop.cellRhoQ,pop.cellJi) for pop in pops.values()))
+      cellRhoQ = np.array(cellRhoQ).sum(axis = 0)
+      cellJ = np.array(cellJ).sum(axis = 0)
    
    logs["avgCellRhoQ"] = np.sum(cellRhoQ)
    

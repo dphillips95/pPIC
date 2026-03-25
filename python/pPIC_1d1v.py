@@ -8,16 +8,17 @@ from scipy.sparse.linalg import gmres
 from timeit import default_timer as timer
 import numba
 from numba import int64,float64,boolean
-from numba import types
 from numba.typed import Dict as nb_dict
 from numba import njit
 from numba.experimental import jitclass as jitclass
 import configparser
 import argparse
 import xarray as xr
+import logging
+import types
 
-from tools import split_axis,floatToStr
-from interpolators import face2cell,face2node,face2r,cell2node,cell2face,cell2r,node2face,node2cell,node2r,face2cell_njit,face2node_njit,face2r_njit,cell2node_njit,cell2face_njit,cell2r_njit,node2face_njit,node2cell_njit,node2r_njit
+from tools import split_axis,floatToStr,shift_indices,shift_indices_njit
+from interpolators import face2cell,face2node,face2r,face2r,cell2node,cell2face,cell2r,cell2r,node2face,node2cell,node2r,node2r,face2cell_njit,face2node_njit,face2r_njit,cell2node_njit,cell2face_njit,cell2r_njit,node2face_njit,node2cell_njit,node2r_njit
 from populations import Pop,compute_alpha,moveParticles,Lorentz,compute_rotated_current,compute_mass_matrices,accumulators,calcNodeData,Pop_njit,compute_alpha_njit,moveParticles_njit,Lorentz_njit,compute_rotated_current_njit,compute_mass_matrices_njit
 from fields import Fields,upwind_fields
 from output import save_data
@@ -130,6 +131,36 @@ def parse_multiarg_config(config, section, param_name, type_fun = str, divider =
       return None
    return [type_fun(x) for x in tmp]
 
+def log_newline(self, how_many_lines=1):
+   # Output blank line by switching to blank handler then back again
+   self.removeHandler(self.console_handler)
+   self.addHandler(self.blank_handler)
+   for i in range(how_many_lines):
+      self.info('')
+   
+   self.removeHandler(self.blank_handler)
+   self.addHandler(self.console_handler)
+
+def create_logger():
+   # Create a logger with two handles - normal and blank lines
+   console_handler = logging.FileHandler('logfile.txt')
+   console_handler.setLevel(logging.INFO)
+   console_handler.setFormatter(logging.Formatter(fmt="%(asctime)-15s %(levelname)-8s %(message)s"))
+   
+   blank_handler = logging.FileHandler('logfile.txt')
+   blank_handler.setLevel(logging.DEBUG)
+   blank_handler.setFormatter(logging.Formatter(fmt=''))
+   
+   logger = logging.getLogger('logging_test')
+   logger.setLevel(logging.DEBUG)
+   logger.addHandler(console_handler)
+   
+   logger.console_handler = console_handler
+   logger.blank_handler = blank_handler
+   logger.newline = types.MethodType(log_newline, logger)
+   
+   return logger
+
 def readConfig(fName, args):
    # Parse config file
    config = configparser.ConfigParser(allow_no_value = True)
@@ -224,6 +255,12 @@ Dims_spec = [
    ("x_range", int64[:]),
    ("y_range", int64[:]),
    ("z_range", int64[:]),
+   ("x_range_r2l", int64[:]),
+   ("y_range_r2l", int64[:]),
+   ("z_range_r2l", int64[:]),
+   ("x_range_l2r", int64[:]),
+   ("y_range_l2r", int64[:]),
+   ("z_range_l2r", int64[:]),
    ("x_locs", float64[:]),
    ("y_locs", float64[:]),
    ("z_locs", float64[:]),
@@ -246,18 +283,32 @@ class Dims:
       self.dy = (self.y_max - self.y_min)/self.y_size
       self.dz = (self.z_max - self.z_min)/self.z_size
       self.dV = self.dx*self.dy*self.dz
-      self.dt = dt
-      self.theta = theta
       self.Ncells_total = self.x_size*self.y_size*self.z_size
+      
       self.dim_scalar = np.array([self.z_size,self.y_size,self.x_size], dtype = int64)
       self.dim_vector = np.array([self.z_size,self.y_size,self.x_size,3], dtype = int64)
+
+      self.dt = dt
+      self.theta = theta
+      
       self.x_range = np.array(list(range(self.x_size)), dtype = int64)
       self.y_range = np.array(list(range(self.y_size)), dtype = int64)
       self.z_range = np.array(list(range(self.z_size)), dtype = int64)
+      
       self.x_locs = np.linspace(self.x_min + self.dx/2, self.x_max - self.dx/2, self.x_size)
       self.y_locs = np.linspace(self.y_min + self.dy/2, self.y_max - self.dy/2, self.y_size)
       self.z_locs = np.linspace(self.z_min + self.dz/2, self.z_max - self.dz/2, self.z_size)
+      
       self.period = np.array(list(period), dtype = boolean)
+      
+      self.x_range_r2l = shift_indices_njit(self.x_range, 1, self.period[2])
+      self.y_range_r2l = shift_indices_njit(self.y_range, 1, self.period[1])
+      self.z_range_r2l = shift_indices_njit(self.z_range, 1, self.period[0])
+      
+      self.x_range_l2r = shift_indices_njit(self.x_range, -1, self.period[2])
+      self.y_range_l2r = shift_indices_njit(self.y_range, -1, self.period[1])
+      self.z_range_l2r = shift_indices_njit(self.z_range, -1, self.period[0])
+      
       self.linear = linear
       self.oneV = oneV
       self.time = time
@@ -273,6 +324,8 @@ class Dims:
       period = self.period.copy()
       linear = self.linear
       oneV = self.oneV
+      time = self.time
+      timestep = self.timestep
 
       return lims,dt,theta,sizes,period,linear,oneV,time,timestep
 
@@ -291,46 +344,47 @@ def initialise_populations():
    
    pops = {}
    # pops_njit = {}
-   for pop_name in pop_list:
-      electron = config.getboolean(pop_name, "electron", fallback = "no")
-      mass = config.getfloat(pop_name, "mass", fallback = None)
-      charge = config.getfloat(pop_name, "charge", fallback = None)
-      temp = config.getfloat(pop_name, "temperature", fallback = None)
+   if pop_list is not None:
+      for pop_name in pop_list:
+         electron = config.getboolean(pop_name, "electron", fallback = False)
+         mass = config.getfloat(pop_name, "mass", fallback = 0.0)
+         charge = config.getfloat(pop_name, "charge", fallback = 0.0)
+         temp = config.getfloat(pop_name, "temperature", fallback = 0.0)
 
-      velocity = parse_multiarg_config(config, pop_name, "velocity", type_fun = float)
+         velocity = parse_multiarg_config(config, pop_name, "velocity", type_fun = float)
 
-      density = config.getfloat(pop_name, "density", fallback = None)
-      macros = config.getint(pop_name, "macroparticles_per_cell", fallback = None)
-      
-      weight = density*dims.dV/macros
+         density = config.getfloat(pop_name, "density", fallback = 0.0)
+         macros = config.getint(pop_name, "macroparticles_per_cell", fallback = 1)
+         
+         weight = density*dims.dV/macros
 
-      if electron:
-         mass = const.m_p/args.mass_ratio
-      else:
-         mass *= const.m_p
-      
-      charge *= const.e
-      pops[pop_name] = Pop(pop_name, charge, mass, weight, electron, macros, rng, dims, temp, velocity)
+         if electron:
+            mass = const.m_p/args.mass_ratio
+         else:
+            mass *= const.m_p
+
+         charge *= const.e
+
+         static = config.getboolean(pop_name, "static", fallback = False)
+         
+         pops[pop_name] = Pop(pop_name, charge, mass, weight, electron, macros, rng, dims, temp, velocity, static)
       # pops_njit[pop_name] = Pop_njit(charge, mass, weight, electron, macros, rng, dims, temp, velocity)
 
 def build_A(mass_matrices):
    # Construct sparse matrix A of Ax = b equation representing Maxwell's equations
    if dims.oneV:
       A = np.zeros((2*dims.Ncells_total,2*dims.Ncells_total))
-      A[:dims.Ncells_total,dims.Ncells_total:] += dims.dt*const.mu_0*dims.theta*mass_matrices[0,0]
+      # B-component of Faraday's law
+      A[:dims.Ncells_total,:dims.Ncells_total] = np.identity(dims.Ncells_total)
+      # E-component of Faraday's law not present due to 1V
 
-      A[:dims.Ncells_total,dims.Ncells_total:] += np.identity(dims.Ncells_total)/const.c**2
+      # B-component of Ampère's Law not present due to 1V
 
-      # for ii in range(dims.Ncells_total):
-      #    A[ii,ii + dims.Ncells_total] += 1/const.c**2
-
-      A[dims.Ncells_total:,:dims.Ncells_total] = np.identity(dims.Ncells_total)
-      
-      # for ii in range(dims.Ncells_total):
-      #    A[ii + dims.Ncells_total,ii] += 1
+      # E-component of Ampère's Law
+      A[dims.Ncells_total:,dims.Ncells_total:] = np.identity(dims.Ncells_total)
+      A[dims.Ncells_total:,dims.Ncells_total:] += dims.dt*dims.theta*mass_matrices[0,0]/const.epsilon_0
    else:
       A = np.zeros((6*dims.Ncells_total,6*dims.Ncells_total))
-      
    return A
 
 def build_b(faceB,nodeE,nodeJ_hat,mass_matrices):
@@ -348,12 +402,16 @@ def build_b(faceB,nodeE,nodeJ_hat,mass_matrices):
    Jx = Jx.flatten()
    Jy = Jy.flatten()
    Jz = Jz.flatten()
+
+   Jx += (1 - dims.theta)*mass_matrices[0,0]@Ex
    
    if dims.oneV:
       b = np.zeros(2*dims.Ncells_total)
-      b[:dims.Ncells_total] += 1/const.c**2*Ex-dims.dt*const.mu_0*Jx-dims.dt*const.mu_0*(1-dims.theta)*mass_matrices[0,0]@Ex
-      
-      b[dims.Ncells_total:] += Bx
+      # Constant-term of Faraday's Law
+      b[:dims.Ncells_total] += Bx
+
+      # Constant term of Ampère's Law
+      b[dims.Ncells_total:] += Ex-dims.dt*Jx/const.epsilon_0
    else:
       b = np.zeros(6*dims.Ncells_total)
    
@@ -363,7 +421,7 @@ def test_interpolators():
    # Test interpolation methods
    Np = 10
    r = rng.uniform((dims.x_min,dims.y_min,dims.z_min), (dims.x_max,dims.y_max,dims.z_max), (Np,3))
-
+   
    dims_n = Dims(*dims.copy())
    dims_n.linear = False
    
@@ -381,13 +439,13 @@ def test_interpolators():
    cell_to_r_s_n = cell2r(cell_s, r, dims_n)
    cell_to_r_v_n = cell2r(cell_v, r, dims_n)
    
-   cell_to_face_njit = cell2face_njit(cell_v, dims)
-   cell_to_node_s_njit = cell2node_njit(cell_s, dims)
-   cell_to_node_v_njit = cell2node_njit(cell_v, dims)
-   cell_to_r_s_l_njit = cell2r_njit(cell_s, r, dims)
-   cell_to_r_v_l_njit = cell2r_njit(cell_v, r, dims)
-   cell_to_r_s_n_njit = cell2r_njit(cell_s, r, dims_n)
-   cell_to_r_v_n_njit = cell2r_njit(cell_v, r, dims_n)
+   # cell_to_face_njit = cell2face_njit(cell_v, dims)
+   # cell_to_node_s_njit = cell2node_njit(cell_s, dims)
+   # cell_to_node_v_njit = cell2node_njit(cell_v, dims)
+   # cell_to_r_s_l_njit = cell2r_njit(cell_s, r, dims)
+   # cell_to_r_v_l_njit = cell2r_njit(cell_v, r, dims)
+   # cell_to_r_s_n_njit = cell2r_njit(cell_s, r, dims_n)
+   # cell_to_r_v_n_njit = cell2r_njit(cell_v, r, dims_n)
 
    # node_s = np.array(range(dims.Ncells_total), dtype = float).reshape(dims.dim_scalar)
    # node_v = np.array(range(dims.Ncells_total*3), dtype = float).reshape(dims.dim_vector)
@@ -403,13 +461,13 @@ def test_interpolators():
    node_to_r_s_n = node2r(node_s, r, dims_n)
    node_to_r_v_n = node2r(node_v, r, dims_n)
    
-   node_to_face_njit = node2face_njit(node_v, dims)
-   node_to_cell_s_njit = node2cell_njit(node_s, dims)
-   node_to_cell_v_njit = node2cell_njit(node_v, dims)
-   node_to_r_s_l_njit = node2r_njit(node_s, r, dims)
-   node_to_r_v_l_njit = node2r_njit(node_v, r, dims)
-   node_to_r_s_n_njit = node2r_njit(node_s, r, dims_n)
-   node_to_r_v_n_njit = node2r_njit(node_v, r, dims_n)
+   # node_to_face_njit = node2face_njit(node_v, dims)
+   # node_to_cell_s_njit = node2cell_njit(node_s, dims)
+   # node_to_cell_v_njit = node2cell_njit(node_v, dims)
+   # node_to_r_s_l_njit = node2r_njit(node_s, r, dims)
+   # node_to_r_v_l_njit = node2r_njit(node_v, r, dims)
+   # node_to_r_s_n_njit = node2r_njit(node_s, r, dims_n)
+   # node_to_r_v_n_njit = node2r_njit(node_v, r, dims_n)
    
    # face = np.array(range(dims.Ncells_total*3), dtype = float).reshape(dims.dim_vector)
    
@@ -418,10 +476,10 @@ def test_interpolators():
    face_to_cell = face2cell(face, dims)
    face_to_node = face2node(face, dims)
    face_to_r = face2r(face, r, dims)
-
-   face_to_cell_njit = face2cell_njit(face, dims)
-   face_to_node_njit = face2node_njit(face, dims)
-   face_to_r_njit = face2r_njit(face, r, dims)
+   
+   # face_to_cell_njit = face2cell_njit(face, dims)
+   # face_to_node_njit = face2node_njit(face, dims)
+   # face_to_r_njit = face2r_njit(face, r, dims)
 
    compare("cell2face:        ", cell_to_face, cell_to_face_njit)
    compare("cell2node scalar: ", cell_to_node_s, cell_to_node_s_njit)
@@ -591,22 +649,43 @@ def cap_dt(pops):
    maxV = 0.0
    for pop in pops.values():
       maxV = max(maxV, np.linalg.norm(pop.v, axis = 1).max())
-   
-   if args.dt*maxV > dims.dx*dt_cap:
-      print("")
-      print("WARNING: maximum particle motion for given particle velocity exceeded, shrinking time step accordingly")
 
-   if maxV > 0:
-      dims.dt = min(args.dt, dims.dx/maxV*dt_cap)
+   n_e = 0
+   
+   for pop in pops.values():
+      electron = config.getboolean(pop.name, "electron", fallback = False)
+      if electron:
+         n_e += config.getfloat(pop.name, "density", fallback = 0.0)
+      
+   plasma_freq = math.sqrt(n_e*const.e**2/(const.m_e*const.epsilon_0))
+
+   maxB = np.max(np.linalg.norm(fields.faceB, axis = -1))
+   
+   electron_gyro = const.e*maxB/const.m_e
+   
+   dt_pf = 1/plasma_freq if plasma_freq > 0 else np.inf
+   dt_eg = 1/electron_gyro if electron_gyro > 0 else np.inf
+   dt_part = dims.dx/maxV*dt_cap
+   dt_yee = 0.9999 * min([dims.dx,dims.dy,dims.dz])/const.c
+   
+   if args.dt > dt_part:
+      logger.info("Shrinking dt to prevent particles from crossing cell")
+      print("Shrinking dt to prevent particles from crossing cell")
+      dims.dt = dt_part
    else:
       dims.dt = args.dt
+   
+   logger.info("Time step relative factors")
+   logger.info("dt*omega_pe = " + str(dims.dt*plasma_freq))
+   logger.info("dt*omega_ce = " + str(dims.dt*electron_gyro))
+   logger.info("dt/dt_yee = " + str(dims.dt/dt_yee))
    
 args,config = readConfig(args.config, args)
 
 dt = args.dt
 theta = args.theta
 
-dt_cap = config.getfloat("simulation", "Vdt_dx_cap", fallback = 0.5)
+dt_cap = config.getfloat("simulation", "Vdt_dx_cap", fallback = 0.25)
 
 dimensions = config.getint("main", "dimensions", fallback = 3)
 
@@ -621,8 +700,8 @@ z_periodic = config.getboolean("domain", "z_periodic", fallback = True)
 
 rng = np.random.default_rng(args.seed)
 
-x_min = config.getfloat("domain", "x_min", fallback = 0)
-x_max = config.getfloat("domain", "x_max", fallback = 1)
+x_min = config.getfloat("domain", "x_min", fallback = 0.0)
+x_max = config.getfloat("domain", "x_max", fallback = 1.0)
 x_size = config.getint("domain", "x_size", fallback = 1)
 dx = (x_max - x_min)/x_size
 
@@ -688,7 +767,7 @@ lims = ((x_min,x_max),(y_min,y_max),(z_min,z_max))
 sizes = (x_size,y_size,z_size)
 period = (z_periodic, y_periodic, x_periodic, True)
 
-dims = Dims(lims, dt, theta, sizes, period, config.getboolean("main", "use_nonlinear_r_interpolation", fallback = False), oneV)
+dims = Dims(lims, dt, theta, sizes, period, not config.getboolean("main", "use_nonlinear_r_interpolation", fallback = False), oneV)
 
 # test_interpolators()
 
@@ -711,174 +790,209 @@ timer_list = [
    'total'
 ]
 
-for timer_name in timer_list:
-   timers.start(timer_name)
-
-timers.tic("total")
-timers.tic("init")
-
-initialise_populations()
-
-B_types = parse_multiarg_config(config, "magnetic_field", "type")
-
-B_init = (
-   config.getfloat("magnetic_field", "Bx"),
-   config.getfloat("magnetic_field", "By"),
-   config.getfloat("magnetic_field", "Bz")
-)
-
-fields = Fields(pops, B_types, B_init, dims)
-
-cap_dt(pops)
-
-for name,pop in pops.items():
-   print("")
-   print("Uncentering particles of population " + name)
-   moveParticles(pop, -dims.dt/2, dims)
+if __name__ == '__main__':
+   logger = create_logger()
    
-timers.toc("init")
+   for timer_name in timer_list:
+      timers.start(timer_name)
 
-if os.path.isfile(args.out_dir + "/fields.h5") or os.path.isfile(args.out_dir + "/pops.h5") or os.path.isfile(args.out_dir + "/logs.h5"):
-   print("Output file(s) already exist, aborting")
-   sys.exit()
+   timers.tic("total")
+   timers.tic("init")
 
-save_data(args.out_dir, fields, pops, dims)
+   initialise_populations()
 
-for jj in range(args.steps):
-   print("")
-   print("Starting time step " + str(jj + 1))
-   
-   timers.tic("locs")
-   
-   print("")
-   print("Moving particles")
-   for pop in pops.values():
-      moveParticles(pop, dims.dt, dims)
+   B_types = parse_multiarg_config(config, "magnetic_field", "type")
 
-   timers.toc("locs")
-   timers.tic("alpha")
-   timers.tic("field solver")
-   
-   print("Calculating alpha \"rotation\" matrices")
-   for pop in pops.values():
-      compute_alpha(pop, fields.faceB, dims)
-   
-   timers.toc("alpha")
-   timers.tic("current")
-      
-   print("Computing rotated current")
-   for pop in pops.values():
-      fields.nodeJ_hat += compute_rotated_current(pop, dims)
-   
-   timers.toc("current")
-   timers.tic("mass matrices")
-   
-   print("Computing mass matrices")
-   if dims.oneV:
-      mass_matrices = np.zeros((1,1,dims.Ncells_total,dims.Ncells_total))
-   else:
-      mass_matrices = np.zeros((3,3,dims.Ncells_total,dims.Ncells_total))
-   
-   for pop in pops.values():
-      mass_matrices += compute_mass_matrices(pop, dims)
-   
-   timers.toc("mass matrices")
-   # breakpoint()
-   timers.tic("maxwell")
-   
-   print("Solving Maxwell's equations")
+   B_init = (
+      config.getfloat("magnetic_field", "Bx"),
+      config.getfloat("magnetic_field", "By"),
+      config.getfloat("magnetic_field", "Bz")
+   )
 
-   timers.tic("build A")
-   
-   A = build_A(mass_matrices)
+   E_types = parse_multiarg_config(config, "electric_field", "type")
 
-   timers.toc("build A")
-   timers.tic("build b")
+   E_init = (
+      config.getfloat("electric_field", "Ex"),
+      config.getfloat("electric_field", "Ey"),
+      config.getfloat("electric_field", "Ez")
+   )
 
-   b = build_b(fields.faceB, fields.nodeE, fields.nodeJ_hat, mass_matrices)
-   
-   timers.toc("build b")
-   timers.tic("gmres")
+   fields = Fields(pops, B_types, B_init, E_types, E_init, dims)
 
-   info = 1
-   rtol = args.rtol
-   atol = args.atol
-   
-   if dims.oneV:
-      x0 = np.concatenate((fields.faceB[:,:,:,0].flat,fields.nodeE[:,:,:,0].flat))
-   else:
-      x0 = np.concatenate((fields.faceB.flat,fields.nodeE.flat))
-   
-   while info > 0 and rtol < 1e-2 and atol < 1e-2:
-      xnext,info = gmres(A, b, rtol = rtol, atol = atol, x0 = x0)
-      if info > 0:
-         rtol *= 10
-         atol *= 10
-   
-   if info < 0:
-      sys.stderr.write("Illegal input in timestep " + str(jj) + "\n")
-      sys.exit(1)
-   elif info > 0:
-      sys.stderr.write("Did not convergence in timestep " + str(jj) + "\n")
-      sys.exit(1)
-   
-   timers.toc("gmres")
+   cap_dt(pops)
 
-   cellJ = np.zeros(dims.dim_vector, dtype = np.float64)
-   for pop in pops.values():
-      cellJ += pop.cellJi
+   logger.newline()
+   for name,pop in pops.items():
+      if pop.static is False:
+         logger.info("Uncentering particles of population " + name)
+         moveParticles(pop, -dims.dt/2, dims)
 
-   nodeJ = cell2node(cellJ, dims)
-      
-   implicitE = fields.nodeE - nodeJ*dims.dt/const.epsilon_0
-
-   old_nodeE = fields.nodeE.copy()
+   timers.toc("init")
    
-   fields,midNodeE = upwind_fields(fields, xnext, dims)
-
-   timers.toc("maxwell")
-   timers.toc("field solver")
-   timers.tic("lorentz")
-
-   for pop in pops.values():
-      Lorentz(pop, midNodeE, dims)
-      # pop.v = Lorentz_njit(pop.r, pop.v, pop.alpha, pop.q, pop.m, midNodeE, dims)
-   
-   timers.toc("lorentz")
-   timers.tic("extra")
-   
-   for pop in pops.values():
-      accumulators(pop, dims)
-      calcNodeData(pop, dims)
-   # fields.update_fields(pops, dims)
-   
-   timers.toc("extra")
-
-   # Increment time
-   dims.step_time()
-   
-   timers.tic("output")
+   if os.path.isfile(args.out_dir + "/fields.h5") or os.path.isfile(args.out_dir + "/pops.h5") or os.path.isfile(args.out_dir + "/logs.h5" or os.path.isfile(args.out_dir + "/logfile.txt")):
+      print("Output file(s) already exist, aborting")
+      sys.exit()
 
    save_data(args.out_dir, fields, pops, dims)
 
-   timers.toc("output")
+   tolerance_error = False
 
-timers.toc("total")
+   print("")
+   print("Starting iterations")
+   for jj in range(1, args.steps + 1):
+      logger.newline()
+      logger.info("Starting time step " + str(jj))
+      if jj%100 == 0:
+         print("Starting time step " + str(jj))
 
-print("")
-print("Time per timestep and cell [ms/(timestep cell)]:")
-print("Total time:           " + floatToStr(1000*timers.timers["total"]/(dims.timestep*dims.Ncells_total), decimals = 3))
-print("Initialisation:       " + floatToStr(1000*timers.timers["init"]/(dims.timestep*dims.Ncells_total), decimals = 3))
-print("Particle locs update: " + floatToStr(1000*timers.timers["locs"]/(dims.timestep*dims.Ncells_total), decimals = 3))
-print("Alpha Computation:    " + floatToStr(1000*timers.timers["alpha"]/(dims.timestep*dims.Ncells_total), decimals = 3))
-print("Current Accumulation: " + floatToStr(1000*timers.timers["current"]/(dims.timestep*dims.Ncells_total), decimals = 3))
-print("Mass Matrices:        " + floatToStr(1000*timers.timers["mass matrices"]/(dims.timestep*dims.Ncells_total), decimals = 3))
-print("Maxwell:              " + floatToStr(1000*timers.timers["maxwell"]/(dims.timestep*dims.Ncells_total), decimals = 3))
-print("   build A:           " + floatToStr(1000*timers.timers["build A"]/(dims.timestep*dims.Ncells_total), decimals = 3))
-print("   build b:           " + floatToStr(1000*timers.timers["build b"]/(dims.timestep*dims.Ncells_total), decimals = 3))
-print("   gmres:             " + floatToStr(1000*timers.timers["gmres"]/(dims.timestep*dims.Ncells_total), decimals = 3))
-print("Lorentz Force update: " + floatToStr(1000*timers.timers["lorentz"]/(dims.timestep*dims.Ncells_total), decimals = 3))
-print("Unused fields update: " + floatToStr(1000*timers.timers["extra"]/(dims.timestep*dims.Ncells_total), decimals = 3))
-print("Field Solver:         " + floatToStr(1000*timers.timers["field solver"]/(dims.timestep*dims.Ncells_total), decimals = 3))
-print("Particle Mover:       " + floatToStr(1000*(timers.timers["locs"] + timers.timers["lorentz"])/(dims.timestep*dims.Ncells_total), decimals = 3))
-print("Data saving:          " + floatToStr(1000*timers.timers["output"]/(dims.timestep*dims.Ncells_total), decimals = 3))
+      timers.tic("locs")
+
+      logger.info("Moving particles")
+      for pop in pops.values():
+         if pop.static is False:
+            moveParticles(pop, dims.dt, dims)
+
+      timers.toc("locs")
+      timers.tic("alpha")
+      timers.tic("field solver")
+
+      logger.info("Calculating alpha \"rotation\" matrices")
+      for pop in pops.values():
+         compute_alpha(pop, fields.faceB, dims)
+
+      timers.toc("alpha")
+      timers.tic("current")
+
+      logger.info("Computing rotated current")
+      nodeJ_hat = np.zeros(dims.dim_vector)
+      for pop in pops.values():
+         if pop.static is False:
+            nodeJ_hat += compute_rotated_current(pop, dims)
+
+      timers.toc("current")
+      timers.tic("mass matrices")
+
+      logger.info("Computing mass matrices")
+      if dims.oneV:
+         mass_matrices = np.zeros((1,1,dims.Ncells_total,dims.Ncells_total))
+      else:
+         mass_matrices = np.zeros((3,3,dims.Ncells_total,dims.Ncells_total))
+
+      for pop in pops.values():
+         if pop.static is False:
+            mass_matrices += compute_mass_matrices(pop, dims)
+
+      timers.toc("mass matrices")
+      timers.tic("maxwell")
+
+      logger.info("Solving Maxwell's equations")
+
+      timers.tic("build A")
+
+      A = build_A(mass_matrices)
+
+      timers.toc("build A")
+      timers.tic("build b")
+
+      b = build_b(fields.faceB, fields.nodeE, nodeJ_hat, mass_matrices)
+
+      timers.toc("build b")
+      timers.tic("gmres")
+
+      # if jj == 84:
+      #    breakpoint()
+
+      info = 1
+      rtol = args.rtol
+      atol = args.atol
+
+      if dims.oneV:
+         x0 = np.concatenate((fields.faceB[:,:,:,0].flat,fields.nodeE[:,:,:,0].flat))
+      else:
+         x0 = np.concatenate((fields.faceB.flat,fields.nodeE.flat))
+
+      while info > 0 and rtol < 1e-2 and atol < 1e-2:
+
+         xnext,info = gmres(A, b, rtol = rtol, atol = atol, x0 = x0)
+         if info > 0:
+            logger.info("GMRES tolerance failure on step " + str(jj) + ", reducing tolerance")
+            if not tolerance_error:
+               tolerance_error = True
+               print("GMRES tolerance failure on step " + str(jj) + ", reducing tolerance")
+            rtol *= 10
+            atol *= 10
+
+      if rtol != args.rtol:
+         logger.info("Tolerance reduced to " + str(rtol) + ", " + str(math.floor(math.log(rtol/args.rtol, 10))) + " orders of magnitude")
+
+      if info < 0:
+         sys.stderr.write("Illegal input in timestep " + str(jj) + "\n")
+         sys.exit(1)
+      elif info > 0:
+         sys.stderr.write("Did not convergence in timestep " + str(jj) + "\n")
+         sys.exit(1)
+
+      timers.toc("gmres")
+
+      # cellJ = np.zeros(dims.dim_vector, dtype = np.float64)
+      # for pop in pops.values():
+      #    cellJ += pop.cellJi
+
+      # nodeJ = cell2node(cellJ, dims)
+
+      # implicitE = fields.nodeE - nodeJ*dims.dt/const.epsilon_0
+
+      # old_nodeE = fields.nodeE.copy()
+
+      fields,midNodeE = upwind_fields(fields, xnext, dims)
+
+      timers.toc("maxwell")
+      timers.toc("field solver")
+      timers.tic("lorentz")
+
+      for pop in pops.values():
+         if pop.static is False:
+            Lorentz(pop, midNodeE, dims)
+            # pop.v = Lorentz_njit(pop.r, pop.v, pop.alpha, pop.q, pop.m, midNodeE, dims)
+
+      timers.toc("lorentz")
+      timers.tic("extra")
+
+      for pop in pops.values():
+         accumulators(pop, dims)
+         calcNodeData(pop, dims)
+      # fields.update_fields(pops, dims)
+
+      timers.toc("extra")
+
+      # Increment time
+      dims.step_time()
+
+      timers.tic("output")
+
+      save_data(args.out_dir, fields, pops, dims)
+
+      timers.toc("output")
+
+   timers.toc("total")
+
+   logger.newline()
+   logger.info("Simulation complete")
+   
+   print("")
+   print("Time per timestep and cell [ms/(cell timestep)]:")
+   print("Total time:           " + floatToStr(1000*timers.timers["total"]/(dims.timestep*dims.Ncells_total), decimals = 3))
+   print("Initialisation:       " + floatToStr(1000*timers.timers["init"]/(dims.timestep*dims.Ncells_total), decimals = 3))
+   print("Particle locs update: " + floatToStr(1000*timers.timers["locs"]/(dims.timestep*dims.Ncells_total), decimals = 3))
+   print("Alpha Computation:    " + floatToStr(1000*timers.timers["alpha"]/(dims.timestep*dims.Ncells_total), decimals = 3))
+   print("Current Accumulation: " + floatToStr(1000*timers.timers["current"]/(dims.timestep*dims.Ncells_total), decimals = 3))
+   print("Mass Matrices:        " + floatToStr(1000*timers.timers["mass matrices"]/(dims.timestep*dims.Ncells_total), decimals = 3))
+   print("Maxwell:              " + floatToStr(1000*timers.timers["maxwell"]/(dims.timestep*dims.Ncells_total), decimals = 3))
+   print("   build A:           " + floatToStr(1000*timers.timers["build A"]/(dims.timestep*dims.Ncells_total), decimals = 3))
+   print("   build b:           " + floatToStr(1000*timers.timers["build b"]/(dims.timestep*dims.Ncells_total), decimals = 3))
+   print("   gmres:             " + floatToStr(1000*timers.timers["gmres"]/(dims.timestep*dims.Ncells_total), decimals = 3))
+   print("Lorentz Force update: " + floatToStr(1000*timers.timers["lorentz"]/(dims.timestep*dims.Ncells_total), decimals = 3))
+   print("Unused fields update: " + floatToStr(1000*timers.timers["extra"]/(dims.timestep*dims.Ncells_total), decimals = 3))
+   print("Field Solver:         " + floatToStr(1000*timers.timers["field solver"]/(dims.timestep*dims.Ncells_total), decimals = 3))
+   print("Particle Mover:       " + floatToStr(1000*(timers.timers["locs"] + timers.timers["lorentz"])/(dims.timestep*dims.Ncells_total), decimals = 3))
+   print("Data saving:          " + floatToStr(1000*timers.timers["output"]/(dims.timestep*dims.Ncells_total), decimals = 3))

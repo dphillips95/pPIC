@@ -10,14 +10,14 @@ class Fields:
    # faceB:     face magnetic fields
    # nodeB:     node magnetic fields
    # nodeE:     node electric field
-   # nodeJ_hat: node total rotated current
-   def __init__(self, pops, B_types, B_init, dims):
+   def __init__(self, pops, B_types, B_init, E_types, E_init, dims):
       # Initialise all fields
       print("")
       print("Initialising all fields")
       
       self.faceB = np.zeros(dims.dim_vector)
-
+      self.nodeE = np.zeros(dims.dim_vector)
+      
       Bx,By,Bz = B_init
       if dims.oneV is True:
          By = Bz = 0
@@ -29,18 +29,32 @@ class Fields:
             self.faceB[:,:,:,2] += Bz
       apply_boundaries_fields(self.faceB, dims)
       
-      nodeUe = pops["e-"].nodeU
-      
       self.update_fields(pops, dims)
 
-      self.nodeE = -np.cross(nodeUe, self.nodeB)
+      Ex,Ey,Ez = E_init
+      if dims.oneV is True:
+         Ey = Ez = 0
+      
+      for E_type in E_types:
+         if E_type == "UeB_cross":
+            if "e-" in pops.keys():
+               nodeUe = pops["e-"].nodeU
+            else:
+               nodeUe = np.zeros(dims.dim_vector)
+            self.nodeE -= np.cross(nodeUe, self.nodeB)
+         elif E_type == "uniform":
+            self.nodeE[:,:,:,0] += Ex
+            self.nodeE[:,:,:,1] += Ey
+            self.nodeE[:,:,:,2] += Ez
+      
       apply_boundaries_fields(self.nodeE, dims)
-
-      self.nodeJ_hat = np.zeros(dims.dim_vector)
 
    def update_fields(self, pops, dims):
       # Calculates non-upwinded fields, e.g. cellJp, nodeUe, etc.
-      self.cellJp = np.sum([x.cellJi for x in pops.values()], axis = 0)
+      if len(pops) == 0:
+         self.cellJp = np.zeros(dims.dim_vector)
+      else:
+         self.cellJp = np.sum([x.cellJi for x in pops.values()], axis = 0)
       apply_boundaries_fields(self.cellJp, dims)
 
       self.faceJp = cell2face(self.cellJp, dims)

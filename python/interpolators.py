@@ -1,11 +1,10 @@
 # Module of interpolators
-
 import math
 import numpy as np
 from numba import njit
 from numba import int64,float64
 
-from tools import arr_shift,shift_indices,split_axis,arr_shift_njit,shift_indices_njit
+from tools import arr_shift,split_axis,arr_shift_njit,CIC_weights_node,CIC_weights_cell
 
 def face2cell(face_data, dims):
    # Interpolates data from cell faces to centre
@@ -370,7 +369,7 @@ def cell2face_njit(cell_data, dims):
    face_data *= 0.5
    
    return face_data
-   
+
 def face2r(face_data, r, dims):
    # Interpolate face data to arbitrary position(s) r
    # Data is assumed to be vector data, face data only stores one component each
@@ -378,36 +377,17 @@ def face2r(face_data, r, dims):
    r_data = np.zeros(r.shape)
    
    xface_data,yface_data,zface_data = split_axis(face_data, axis = 3)
+
+   (x_ind,y_ind,z_ind),(x_w,y_w,z_w) = CIC_weights_node(r, dims, False)
    
-   x_locs_l = np.floor((r[:,0] - dims.x_min)/dims.dx).astype(int)
-   y_locs_l = np.floor((r[:,1] - dims.y_min)/dims.dy).astype(int)
-   z_locs_l = np.floor((r[:,2] - dims.z_min)/dims.dz).astype(int)
+   r_data[:,0] += x_w[0]*xface_data[z_ind[0],y_ind[0],x_ind[0]]
+   r_data[:,0] += x_w[1]*xface_data[z_ind[0],y_ind[0],x_ind[1]]
 
-   x0 = x_locs_l*dims.dx + dims.x_min
-   y0 = y_locs_l*dims.dy + dims.y_min
-   z0 = z_locs_l*dims.dz + dims.z_min
-   x_w1 = (r[:,0] - x0)/dims.dx
-   y_w1 = (r[:,1] - y0)/dims.dy
-   z_w1 = (r[:,2] - z0)/dims.dz
-   x_w0 = 1 - x_w1
-   y_w0 = 1 - y_w1
-   z_w0 = 1 - z_w1
+   r_data[:,1] += y_w[0]*yface_data[z_ind[0],y_ind[0],x_ind[0]]
+   r_data[:,1] += y_w[1]*yface_data[z_ind[0],y_ind[1],x_ind[0]]
 
-   x_locs_r = shift_indices(dims.x_range, -1, dims.period[2])[x_locs_l]
-   y_locs_r = shift_indices(dims.y_range, -1, dims.period[1])[y_locs_l]
-   z_locs_r = shift_indices(dims.z_range, -1, dims.period[0])[z_locs_l]
-   
-   r_data[:,0] += x_w0*xface_data[z_locs_l,y_locs_l,x_locs_l]
-   r_data[:,0] += x_w1*xface_data[z_locs_l,y_locs_l,x_locs_r]
-
-   r_data[:,1] += y_w0*yface_data[z_locs_l,y_locs_l,x_locs_l]
-   r_data[:,1] += y_w1*yface_data[z_locs_l,y_locs_r,x_locs_l]
-
-   r_data[:,2] += z_w0*zface_data[z_locs_l,y_locs_l,x_locs_l]
-   r_data[:,2] += z_w1*zface_data[z_locs_r,y_locs_l,x_locs_l]
-
-   if r.shape[0] == 1:
-      r_data = r_data.reshape(3)
+   r_data[:,2] += z_w[0]*zface_data[z_ind[0],y_ind[0],x_ind[0]]
+   r_data[:,2] += z_w[1]*zface_data[z_ind[1],y_ind[0],x_ind[0]]
    
    return r_data
 
@@ -421,10 +401,6 @@ def face2r_njit(face_data, r, dims):
    p_count = r.shape[0]
 
    r_data = np.zeros((p_count,3))
-   
-   x_shift = shift_indices_njit(dims.x_range, -1, dims.period[2])
-   y_shift = shift_indices_njit(dims.y_range, -1, dims.period[1])
-   z_shift = shift_indices_njit(dims.z_range, -1, dims.period[0])
    
    for ii in range(p_count):
       x_locs_l = math.floor((r[ii,0] - dims.x_min)/dims.dx)
@@ -441,9 +417,9 @@ def face2r_njit(face_data, r, dims):
       y_w0 = 1 - y_w1
       z_w0 = 1 - z_w1
       
-      x_locs_r = x_shift[x_locs_l]
-      y_locs_r = y_shift[y_locs_l]
-      z_locs_r = z_shift[z_locs_l]
+      x_locs_r = dims.x_range_l2r[x_locs_l]
+      y_locs_r = dims.y_range_l2r[y_locs_l]
+      z_locs_r = dims.z_range_l2r[z_locs_l]
       
       r_data[ii,0] += x_w0*face_data[z_locs_l,y_locs_l,x_locs_l,0]
       r_data[ii,0] += x_w1*face_data[z_locs_l,y_locs_l,x_locs_r,0]
@@ -466,35 +442,15 @@ def node2r(node_data, r, dims):
    else:
       r_data = np.zeros(r.shape[0])
    
-   x_locs_l = np.floor((r[:,0] - dims.x_min)/dims.dx).astype(int)
-   y_locs_l = np.floor((r[:,1] - dims.y_min)/dims.dy).astype(int)
-   z_locs_l = np.floor((r[:,2] - dims.z_min)/dims.dz).astype(int)
-   
-   x0 = x_locs_l*dims.dx + dims.x_min
-   y0 = y_locs_l*dims.dy + dims.y_min
-   z0 = z_locs_l*dims.dz + dims.z_min
-   x_w0 = r[:,0] - x0
-   y_w0 = r[:,1] - y0
-   z_w0 = r[:,2] - z0
    if dims.linear:
-      x_w1 = x_w0/dims.dx
-      y_w1 = y_w0/dims.dy
-      z_w1 = z_w0/dims.dz
-      x_w0 = 1 - x_w1
-      y_w0 = 1 - y_w1
-      z_w0 = 1 - z_w1
-      weights = np.array([x_w0*y_w0*z_w0,x_w1*y_w0*z_w0,
-                          x_w0*y_w1*z_w0,x_w1*y_w1*z_w0,
-                          x_w0*y_w0*z_w1,x_w1*y_w0*z_w1,
-                          x_w0*y_w1*z_w1,x_w1*y_w1*z_w1])
+      (x_ind,y_ind,z_ind),(x_w,y_w,z_w) = CIC_weights_node(r, dims, True, True)
+      weights = x_w*y_w*z_w
    else:
-      x_w1 = dims.dx - x_w0
-      y_w1 = dims.dy - y_w0
-      z_w1 = dims.dz - z_w0
-      weights = np.array([[x_w0,y_w0,z_w0],[x_w1,y_w0,z_w0],
-                          [x_w0,y_w1,z_w0],[x_w1,y_w1,z_w0],
-                          [x_w0,y_w0,z_w1],[x_w1,y_w0,z_w1],
-                          [x_w0,y_w1,z_w1],[x_w1,y_w1,z_w1]])
+      (x_ind,y_ind,z_ind),(x_w,y_w,z_w) = CIC_weights_node(r, dims, False, False)
+      weights = np.array([[x_w[1],y_w[1],z_w[1]],[x_w[0],y_w[1],z_w[1]],
+                          [x_w[1],y_w[0],z_w[1]],[x_w[0],y_w[0],z_w[1]],
+                          [x_w[1],y_w[1],z_w[0]],[x_w[0],y_w[1],z_w[0]],
+                          [x_w[1],y_w[0],z_w[0]],[x_w[0],y_w[0],z_w[0]]])
       weights = np.linalg.norm(weights, axis = 1)
       with np.errstate(divide = 'raise'):
          # Deal with rare distance == 0 case
@@ -513,47 +469,18 @@ def node2r(node_data, r, dims):
       weights /= np.sum(weights, axis = 0)
    
    if vec:
-      weights = weights.reshape(8,-1,1)
+      weights = weights.reshape(2,2,2,-1,1)
    else:
-      weights = weights.reshape(8,-1)
+      weights = weights.reshape(2,2,2,-1)
    
-   # r_data += weights[0]*node_data[array_indices[0][z_locs_l+1],
-   #                                array_indices[1][y_locs_l+1],
-   #                                array_indices[2][x_locs_l+1],...]
-   # r_data += weights[1]*node_data[array_indices[0][z_locs_l+2],
-   #                                array_indices[1][y_locs_l+1],
-   #                                array_indices[2][x_locs_l+1],...]
-   # r_data += weights[2]*node_data[array_indices[0][z_locs_l+1],
-   #                                array_indices[1][y_locs_l+2],
-   #                                array_indices[2][x_locs_l+1],...]
-   # r_data += weights[3]*node_data[array_indices[0][z_locs_l+2],
-   #                                array_indices[1][y_locs_l+2],
-   #                                array_indices[2][x_locs_l+1],...]
-   # r_data += weights[4]*node_data[array_indices[0][z_locs_l+1],
-   #                                array_indices[1][y_locs_l+1],
-   #                                array_indices[2][x_locs_l+2],...]
-   # r_data += weights[5]*node_data[array_indices[0][z_locs_l+2],
-   #                                array_indices[1][y_locs_l+1],
-   #                                array_indices[2][x_locs_l+2],...]
-   # r_data += weights[6]*node_data[array_indices[0][z_locs_l+1],
-   #                                array_indices[1][y_locs_l+2],
-   #                                array_indices[2][x_locs_l+2],...]
-   # r_data += weights[7]*node_data[array_indices[0][z_locs_l+2],
-   #                                array_indices[1][y_locs_l+2],
-   #                                array_indices[2][x_locs_l+2],...]
-   
-   x_locs_r = shift_indices(dims.x_range, -1, dims.period[2])[x_locs_l]
-   y_locs_r = shift_indices(dims.y_range, -1, dims.period[1])[y_locs_l]
-   z_locs_r = shift_indices(dims.z_range, -1, dims.period[0])[z_locs_l]
-   
-   r_data += weights[0]*node_data[z_locs_l, y_locs_l, x_locs_l,...]
-   r_data += weights[1]*node_data[z_locs_r, y_locs_l, x_locs_l,...]
-   r_data += weights[2]*node_data[z_locs_l, y_locs_r, x_locs_l,...]
-   r_data += weights[3]*node_data[z_locs_r, y_locs_r, x_locs_l,...]
-   r_data += weights[4]*node_data[z_locs_l, y_locs_l, x_locs_r,...]
-   r_data += weights[5]*node_data[z_locs_r, y_locs_l, x_locs_r,...]
-   r_data += weights[6]*node_data[z_locs_l, y_locs_r, x_locs_r,...]
-   r_data += weights[7]*node_data[z_locs_r, y_locs_r, x_locs_r,...]
+   r_data += weights[0,0,0]*node_data[z_ind[0], y_ind[0], x_ind[0],...]
+   r_data += weights[0,0,1]*node_data[z_ind[0], y_ind[0], x_ind[1],...]
+   r_data += weights[0,1,0]*node_data[z_ind[0], y_ind[1], x_ind[0],...]
+   r_data += weights[0,1,1]*node_data[z_ind[0], y_ind[1], x_ind[1],...]
+   r_data += weights[1,0,0]*node_data[z_ind[1], y_ind[0], x_ind[0],...]
+   r_data += weights[1,0,1]*node_data[z_ind[1], y_ind[0], x_ind[1],...]
+   r_data += weights[1,1,0]*node_data[z_ind[1], y_ind[1], x_ind[0],...]
+   r_data += weights[1,1,1]*node_data[z_ind[1], y_ind[1], x_ind[1],...]
 
    if r.shape[0] == 1:
       r_data = r_data.reshape(3)
@@ -573,11 +500,7 @@ def node2r_njit(node_data, r, dims):
       r_data = np.zeros((p_count,3))
    else:
       r_data = np.zeros(p_count)
-
-   x_shift = shift_indices_njit(dims.x_range, -1, dims.period[2])
-   y_shift = shift_indices_njit(dims.y_range, -1, dims.period[1])
-   z_shift = shift_indices_njit(dims.z_range, -1, dims.period[0])
-      
+   
    for ii in range(p_count):
       x_locs_l = math.floor((r[ii,0] - dims.x_min)/dims.dx)
       y_locs_l = math.floor((r[ii,1] - dims.y_min)/dims.dy)
@@ -618,9 +541,9 @@ def node2r_njit(node_data, r, dims):
             weights = 1/weights
          weights /= np.sum(weights, axis = 0)
       
-      x_locs_r = x_shift[x_locs_l]
-      y_locs_r = y_shift[y_locs_l]
-      z_locs_r = z_shift[z_locs_l]
+      x_locs_r = dims.x_range_l2r[x_locs_l]
+      y_locs_r = dims.y_range_l2r[y_locs_l]
+      z_locs_r = dims.z_range_l2r[z_locs_l]
 
       if node_data.ndim == 3:
          r_data[ii] += weights[0]*node_data[z_locs_l, y_locs_l, x_locs_l]
@@ -656,50 +579,15 @@ def cell2r(cell_data, r, dims):
    else:
       r_data = np.zeros(r.shape[0])
    
-   x_locs_r = np.round((r[:,0] - dims.x_min)/dims.dx).astype(int)
-   y_locs_r = np.round((r[:,1] - dims.y_min)/dims.dy).astype(int)
-   z_locs_r = np.round((r[:,2] - dims.z_min)/dims.dz).astype(int)
-   
-   # if dims.period[2]:
-   #    x_locs_r = np.mod(x_locs_r, dims.x_size)
-   # if dims.period[1]:
-   #    y_locs_r = np.mod(y_locs_r, dims.y_size)
-   # if dims.period[0]:
-   #    z_locs_r = np.mod(z_locs_r, dims.z_size)
-   
-   x0 = (x_locs_r - 1 + 0.5)*dims.dx + dims.x_min
-   y0 = (y_locs_r - 1 + 0.5)*dims.dy + dims.y_min
-   z0 = (z_locs_r - 1 + 0.5)*dims.dz + dims.z_min
-   x_w0 = r[:,0] - x0
-   y_w0 = r[:,1] - y0
-   z_w0 = r[:,2] - z0
-   
-   # if dims.period[2]:
-   #    x_w0 = np.mod(x_w1, 1)
-   # if dims.period[1]:
-   #    y_w0 = np.mod(y_w1, 1)
-   # if dims.period[0]:
-   #    z_w0 = np.mod(z_w1, 1)
-
    if dims.linear:
-      x_w1 = x_w0/dims.dx
-      y_w1 = y_w0/dims.dy
-      z_w1 = z_w0/dims.dz
-      x_w0 = 1 - x_w1
-      y_w0 = 1 - y_w1
-      z_w0 = 1 - z_w1
-      weights = np.array([x_w0*y_w0*z_w0,x_w1*y_w0*z_w0,
-                          x_w0*y_w1*z_w0,x_w1*y_w1*z_w0,
-                          x_w0*y_w0*z_w1,x_w1*y_w0*z_w1,
-                          x_w0*y_w1*z_w1,x_w1*y_w1*z_w1])
+      (x_ind,y_ind,z_ind),(x_w,y_w,z_w) = CIC_weights_cell(r, dims, True, True)
+      weights = x_w*y_w*z_w
    else:
-      x_w1 = dims.dx - x_w0
-      y_w1 = dims.dy - y_w0
-      z_w1 = dims.dz - z_w0
-      weights = np.array([[x_w0,y_w0,z_w0],[x_w1,y_w0,z_w0],
-                          [x_w0,y_w1,z_w0],[x_w1,y_w1,z_w0],
-                          [x_w0,y_w0,z_w1],[x_w1,y_w0,z_w1],
-                          [x_w0,y_w1,z_w1],[x_w1,y_w1,z_w1]])
+      (x_ind,y_ind,z_ind),(x_w,y_w,z_w) = CIC_weights_cell(r, dims, False, False)
+      weights = np.array([[x_w[1],y_w[1],z_w[1]],[x_w[0],y_w[1],z_w[1]],
+                          [x_w[1],y_w[0],z_w[1]],[x_w[0],y_w[0],z_w[1]],
+                          [x_w[1],y_w[1],z_w[0]],[x_w[0],y_w[1],z_w[0]],
+                          [x_w[1],y_w[0],z_w[0]],[x_w[0],y_w[0],z_w[0]]])
       weights = np.linalg.norm(weights, axis = 1)
       with np.errstate(divide = 'raise'):
          # Deal with rare distance == 0 case
@@ -719,54 +607,18 @@ def cell2r(cell_data, r, dims):
       weights /= np.sum(weights, axis = 0)
       
    if vec:
-      weights = weights.reshape(8,-1,1)
+      weights = weights.reshape(2,2,2,-1,1)
    else:
-      weights = weights.reshape(8,-1)
+      weights = weights.reshape(2,2,2,-1)
    
-   # r_data += weights[0]*cell_data[array_indices[0][z_locs_r],
-   #                                array_indices[1][y_locs_r],
-   #                                array_indices[2][x_locs_r],...]
-   # r_data += weights[1]*cell_data[array_indices[0][z_locs_r+1],
-   #                                array_indices[1][y_locs_r],
-   #                                array_indices[2][x_locs_r],...]
-   # r_data += weights[2]*cell_data[array_indices[0][z_locs_r],
-   #                                array_indices[1][y_locs_r+1],
-   #                                array_indices[2][x_locs_r],...]
-   # r_data += weights[3]*cell_data[array_indices[0][z_locs_r+1],
-   #                                array_indices[1][y_locs_r+1],
-   #                                array_indices[2][x_locs_r],...]
-   # r_data += weights[4]*cell_data[array_indices[0][z_locs_r],
-   #                                array_indices[1][y_locs_r],
-   #                                array_indices[2][x_locs_r+1],...]
-   # r_data += weights[5]*cell_data[array_indices[0][z_locs_r+1],
-   #                                array_indices[1][y_locs_r],
-   #                                array_indices[2][x_locs_r+1],...]
-   # r_data += weights[6]*cell_data[array_indices[0][z_locs_r],
-   #                                array_indices[1][y_locs_r+1],
-   #                                array_indices[2][x_locs_r+1],...]
-   # r_data += weights[7]*cell_data[array_indices[0][z_locs_r+1],
-   #                                array_indices[1][y_locs_r+1],
-   #                                array_indices[2][x_locs_r+1],...]
-
-   if dims.period[2]:
-      x_locs_r = np.mod(x_locs_r, dims.x_size)
-   if dims.period[1]:
-      y_locs_r = np.mod(y_locs_r, dims.y_size)
-   if dims.period[0]:
-      z_locs_r = np.mod(z_locs_r, dims.z_size)
-   
-   x_locs_l = shift_indices(dims.x_range, 1, dims.period[2])[x_locs_r]
-   y_locs_l = shift_indices(dims.y_range, 1, dims.period[1])[y_locs_r]
-   z_locs_l = shift_indices(dims.z_range, 1, dims.period[0])[z_locs_r]
-   
-   r_data += weights[0]*cell_data[z_locs_l, y_locs_l, x_locs_l,...]
-   r_data += weights[1]*cell_data[z_locs_l, y_locs_l, x_locs_r,...]
-   r_data += weights[2]*cell_data[z_locs_l, y_locs_r, x_locs_l,...]
-   r_data += weights[3]*cell_data[z_locs_l, y_locs_r, x_locs_r,...]
-   r_data += weights[4]*cell_data[z_locs_r, y_locs_l, x_locs_l,...]
-   r_data += weights[5]*cell_data[z_locs_r, y_locs_l, x_locs_r,...]
-   r_data += weights[6]*cell_data[z_locs_r, y_locs_r, x_locs_l,...]
-   r_data += weights[7]*cell_data[z_locs_r, y_locs_r, x_locs_r,...]
+   r_data += weights[0,0,0]*cell_data[z_ind[0], y_ind[0], x_ind[0],...]
+   r_data += weights[0,0,1]*cell_data[z_ind[0], y_ind[0], x_ind[1],...]
+   r_data += weights[0,1,0]*cell_data[z_ind[0], y_ind[1], x_ind[0],...]
+   r_data += weights[0,1,1]*cell_data[z_ind[0], y_ind[1], x_ind[1],...]
+   r_data += weights[1,0,0]*cell_data[z_ind[1], y_ind[0], x_ind[0],...]
+   r_data += weights[1,0,1]*cell_data[z_ind[1], y_ind[0], x_ind[1],...]
+   r_data += weights[1,1,0]*cell_data[z_ind[1], y_ind[1], x_ind[0],...]
+   r_data += weights[1,1,1]*cell_data[z_ind[1], y_ind[1], x_ind[1],...]
 
    if r.shape[0] == 1:
       if vec:
@@ -791,10 +643,6 @@ def cell2r_njit(cell_data, r, dims):
       r_data = np.zeros((p_count,3))
    else:
       r_data = np.zeros(p_count)
-   
-   x_shift = shift_indices_njit(dims.x_range, 1, dims.period[2])
-   y_shift = shift_indices_njit(dims.y_range, 1, dims.period[1])
-   z_shift = shift_indices_njit(dims.z_range, 1, dims.period[0])
    
    for ii in range(p_count):
       x_locs_r = round((r[ii,0] - dims.x_min)/dims.dx)
@@ -858,9 +706,9 @@ def cell2r_njit(cell_data, r, dims):
       if dims.period[0]:
          z_locs_r = z_locs_r % dims.z_size
       
-      x_locs_l = x_shift[x_locs_r]
-      y_locs_l = y_shift[y_locs_r]
-      z_locs_l = z_shift[z_locs_r]
+      x_locs_l = dims.x_range_r2l[x_locs_r]
+      y_locs_l = dims.y_range_r2l[y_locs_r]
+      z_locs_l = dims.z_range_r2l[z_locs_r]
 
       if vec:
          for nn in range(3):

@@ -8,7 +8,7 @@ from numba import njit,int64,float64,guvectorize
 from numba.experimental import jitclass
 
 from interpolators import face2r,cell2r,node2r,face2r_njit,cell2r_njit,node2r_njit
-from tools import split_axis,numba_unravel_index
+from tools import split_axis,numba_unravel_index,CIC_weights_node,CIC_weights_cell
 
 class Pop:
    # Contents:
@@ -24,7 +24,8 @@ class Pop:
    # cellRhoQ: population cell charge density
    # nodeU:    population node bulk velocity
    # nodeN:    population node number density
-   def __init__(self, name, q, m, w, electron, Np, rng, dims, T = None, v = None):
+   # static:   if True then population positions and velocities will not be updated, and impact on fields is ignored
+   def __init__(self, name, q, m, w, electron, Np, rng, dims, T = 0, v = 0, static = False):
       # Initial fill of particle population
       # If Np = 0 skips particle creation
 
@@ -41,7 +42,7 @@ class Pop:
       self.q = q
       self.m = m
       self.w = w
-
+      
       self.ID = np.empty((0), dtype = np.int64)
       self.r = np.empty((0,3), dtype = np.float64)
       self.v = np.empty((0,3), dtype = np.float64)
@@ -52,6 +53,8 @@ class Pop:
       
       accumulators(self, dims)
       calcNodeData(self, dims)
+      
+      self.static = static
       
 def uniform_injector(pop, Np, vth, v, rng, dims):
    # Inject Np particles between xmin and xmax, bulk velocity v, and thermal velocity vth
@@ -83,6 +86,8 @@ def uniform_injector(pop, Np, vth, v, rng, dims):
       if dims.oneV is False:
          v_ins[ii*Np:(ii+1)*Np,1] = rng.normal(v[1], vth, Np)
          v_ins[ii*Np:(ii+1)*Np,2] = rng.normal(v[2], vth, Np)
+
+      v_ins[ii*Np:(ii+1)*Np,0] += 0.1*vth*np.sin(2*math.pi*3*r_ins[ii*Np:(ii+1)*Np,0]/(dims.x_max - dims.x_min))
 
    if pop.ID.size == 0:
       ID_max = -1
@@ -126,19 +131,18 @@ def removeParticle(pop, to_delete):
 
 def accumulators(pop, dims):
    # Accumulate macroparticles into cell-centred charge and current densities
-   (x_ind,y_ind,z_ind),(x_w,y_w,z_w) = CIC_weights_cell(pop.r, dims)
-   
    pop.cellRhoQ = np.zeros(dims.dim_scalar, dtype = float)
    pop.cellJi = np.zeros(dims.dim_vector, dtype = float)
    
    # CIC weight factors
+   (x_ind,y_ind,z_ind),(x_w,y_w,z_w) = CIC_weights_cell(pop.r, dims)
    w = z_w*y_w*x_w
 
    np.add.at(pop.cellRhoQ, (z_ind[0],y_ind[0],x_ind[0]), w[0,0,0])
    np.add.at(pop.cellRhoQ, (z_ind[0],y_ind[0],x_ind[1]), w[0,0,1])
    np.add.at(pop.cellRhoQ, (z_ind[0],y_ind[1],x_ind[0]), w[0,1,0])
    np.add.at(pop.cellRhoQ, (z_ind[0],y_ind[1],x_ind[1]), w[0,1,1])
-   np.add.at(pop.cellRhoQ, (z_ind[1],y_ind[0],x_ind[0]), w[1,1,0])
+   np.add.at(pop.cellRhoQ, (z_ind[1],y_ind[0],x_ind[0]), w[1,0,0])
    np.add.at(pop.cellRhoQ, (z_ind[1],y_ind[0],x_ind[1]), w[1,0,1])
    np.add.at(pop.cellRhoQ, (z_ind[1],y_ind[1],x_ind[0]), w[1,1,0])
    np.add.at(pop.cellRhoQ, (z_ind[1],y_ind[1],x_ind[1]), w[1,1,1])
@@ -147,7 +151,7 @@ def accumulators(pop, dims):
    np.add.at(pop.cellJi[:,:,:], (z_ind[0],y_ind[0],x_ind[1]), w[0,0,1].reshape(-1,1)*pop.v)
    np.add.at(pop.cellJi[:,:,:], (z_ind[0],y_ind[1],x_ind[0]), w[0,1,0].reshape(-1,1)*pop.v)
    np.add.at(pop.cellJi[:,:,:], (z_ind[0],y_ind[1],x_ind[1]), w[0,1,1].reshape(-1,1)*pop.v)
-   np.add.at(pop.cellJi[:,:,:], (z_ind[1],y_ind[0],x_ind[0]), w[1,1,0].reshape(-1,1)*pop.v)
+   np.add.at(pop.cellJi[:,:,:], (z_ind[1],y_ind[0],x_ind[0]), w[1,0,0].reshape(-1,1)*pop.v)
    np.add.at(pop.cellJi[:,:,:], (z_ind[1],y_ind[0],x_ind[1]), w[1,0,1].reshape(-1,1)*pop.v)
    np.add.at(pop.cellJi[:,:,:], (z_ind[1],y_ind[1],x_ind[0]), w[1,1,0].reshape(-1,1)*pop.v)
    np.add.at(pop.cellJi[:,:,:], (z_ind[1],y_ind[1],x_ind[1]), w[1,1,1].reshape(-1,1)*pop.v)
@@ -158,7 +162,7 @@ def accumulators(pop, dims):
 def compute_alpha(pop, faceB, dims):
    # Compute alpha matrix for all particles in population
    rB = face2r(faceB, pop.r, dims)
-
+   
    beta = (pop.q*dims.dt)/(2*pop.m)
 
    bx,by,bz = split_axis(rB*beta, axis = 1)
@@ -192,9 +196,9 @@ def moveParticles(pop, dstep, dims):
 def Lorentz(pop, midNodeE, dims):
    # Accelerate particles via Lorentz force
    rE = node2r(midNodeE, pop.r, dims)
-
+   
    beta = (pop.q*dims.dt)/(2*pop.m)
-
+   
    pop.v = 2*np.matvec(pop.alpha, (pop.v + beta*rE)) - pop.v
    
    # for ii,(v,alpha,E) in enumerate(zip(pop.v,pop.alpha,rE)):
@@ -292,7 +296,7 @@ def compute_mass_matrices(pop, dims):
    else:
       M = np.zeros((dims.Ncells_total,dims.Ncells_total,3,3))
       alpha = np.transpose(pop.alpha, (1,2,0))
-
+   
    (x_ind,y_ind,z_ind),(x_w,y_w,z_w) = CIC_weights_node(pop.r, dims)
    
    if dims.oneV is True:
@@ -339,93 +343,6 @@ def compute_mass_matrices(pop, dims):
    M *= beta * pop.q*pop.w/dims.dV
 
    return M
-
-def CIC_weights_node(r, dims):
-   # Calculate CIC weights/interpolation cells for given population
-   # Assumes grid is node (or face)
-   x_locs = np.floor((r[:,0] - dims.x_min)/dims.dx).astype(int)
-   y_locs = np.floor((r[:,1] - dims.y_min)/dims.dy).astype(int)
-   z_locs = np.floor((r[:,2] - dims.z_min)/dims.dz).astype(int)
-
-   x0 = x_locs*dims.dx + dims.x_min
-   y0 = y_locs*dims.dy + dims.y_min
-   z0 = z_locs*dims.dz + dims.z_min
-   
-   x_w1 = (r[:,0] - x0)/dims.dx
-   y_w1 = (r[:,1] - y0)/dims.dy
-   z_w1 = (r[:,2] - z0)/dims.dz
-   
-   x_w0 = 1 - x_w1
-   y_w0 = 1 - y_w1
-   z_w0 = 1 - z_w1
-   
-   x_ind0 = x_locs
-   x_ind1 = x_locs + 1
-   if dims.period[2]:
-      x_ind1 = np.mod(x_ind1, dims.x_size)
-   
-   y_ind0 = y_locs
-   y_ind1 = y_locs + 1
-   if dims.period[1]:
-      y_ind1 = np.mod(y_ind1, dims.y_size)
-   
-   z_ind0 = z_locs
-   z_ind1 = z_locs + 1
-   if dims.period[0]:
-      z_ind1 = np.mod(z_ind1, dims.z_size)
-   
-   x_ind = np.array((x_ind0,x_ind1))
-   y_ind = np.array((y_ind0,y_ind1))
-   z_ind = np.array((z_ind0,z_ind1))
-
-   x_w = np.array((x_w0,x_w1)).reshape(1,1,2,-1)
-   y_w = np.array((y_w0,y_w1)).reshape(1,2,1,-1)
-   z_w = np.array((z_w0,z_w1)).reshape(2,1,1,-1)
-
-   return (x_ind,y_ind,z_ind),(x_w,y_w,z_w)
-
-def CIC_weights_cell(r, dims):
-   # Calculate CIC weights/interpolation cells for given population
-   # Assumes grid is node (or face)
-   x_locs = np.round((r[:,0] - dims.x_min)/dims.dx).astype(int)
-   y_locs = np.round((r[:,1] - dims.y_min)/dims.dy).astype(int)
-   z_locs = np.round((r[:,2] - dims.z_min)/dims.dz).astype(int)
-
-   x0 = (x_locs - 1 + 0.5)*dims.dx + dims.x_min
-   y0 = (y_locs - 1 + 0.5)*dims.dy + dims.y_min
-   z0 = (z_locs - 1 + 0.5)*dims.dz + dims.z_min
-   x_w0 = (r[:,0] - x0)/dims.dx
-   y_w0 = (r[:,1] - y0)/dims.dy
-   z_w0 = (r[:,2] - z0)/dims.dz
-   
-   x_w1 = 1 - x_w0
-   y_w1 = 1 - y_w0
-   z_w1 = 1 - z_w0
-   
-   x_ind0 = x_locs - 1
-   x_ind1 = x_locs
-   if dims.period[2]:
-      x_ind1 = np.mod(x_ind1, dims.x_size)
-   
-   y_ind0 = y_locs - 1
-   y_ind1 = y_locs
-   if dims.period[1]:
-      y_ind1 = np.mod(y_ind1, dims.y_size)
-   
-   z_ind0 = z_locs - 1
-   z_ind1 = z_locs
-   if dims.period[0]:
-      z_ind1 = np.mod(z_ind1, dims.z_size)
-   
-   x_ind = np.array((x_ind0,x_ind1))
-   y_ind = np.array((y_ind0,y_ind1))
-   z_ind = np.array((z_ind0,z_ind1))
-
-   x_w = np.array((x_w0,x_w1)).reshape(1,1,2,-1)
-   y_w = np.array((y_w0,y_w1)).reshape(1,2,1,-1)
-   z_w = np.array((z_w0,z_w1)).reshape(2,1,1,-1)
-   
-   return (x_ind,y_ind,z_ind),(x_w,y_w,z_w)
 
 Pop_spec = [
    ("q", float64),
