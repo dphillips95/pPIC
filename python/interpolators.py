@@ -509,14 +509,14 @@ def node2r_njit(node_data, r, dims):
       x0 = x_locs_l*dims.dx + dims.x_min
       y0 = y_locs_l*dims.dy + dims.y_min
       z0 = z_locs_l*dims.dz + dims.z_min
-      x_w0 = r[ii,0] - x0
-      y_w0 = r[ii,1] - y0
-      z_w0 = r[ii,2] - z0
+      x_w1 = r[ii,0] - x0
+      y_w1 = r[ii,1] - y0
+      z_w1 = r[ii,2] - z0
 
       if dims.linear:
-         x_w1 = x_w0/dims.dx
-         y_w1 = y_w0/dims.dy
-         z_w1 = z_w0/dims.dz
+         x_w1 /= dims.dx
+         y_w1 /= dims.dy
+         z_w1 /= dims.dz
          x_w0 = 1 - x_w1
          y_w0 = 1 - y_w1
          z_w0 = 1 - z_w1
@@ -525,13 +525,13 @@ def node2r_njit(node_data, r, dims):
                              x_w0*y_w0*z_w1,x_w1*y_w0*z_w1,
                              x_w0*y_w1*z_w1,x_w1*y_w1*z_w1])
       else:
-         x_w1 = dims.dx - x_w0
-         y_w1 = dims.dy - y_w0
-         z_w1 = dims.dz - z_w0
-         weights = np.array([[x_w0,y_w0,z_w0],[x_w1,y_w0,z_w0],
-                             [x_w0,y_w1,z_w0],[x_w1,y_w1,z_w0],
-                             [x_w0,y_w0,z_w1],[x_w1,y_w0,z_w1],
-                             [x_w0,y_w1,z_w1],[x_w1,y_w1,z_w1]])
+         x_w0 = dims.dx - x_w1
+         y_w0 = dims.dy - y_w1
+         z_w0 = dims.dz - z_w1
+         weights = np.array([[x_w1,y_w1,z_w1],[x_w0,y_w1,z_w1],
+                             [x_w1,y_w0,z_w1],[x_w0,y_w0,z_w1],
+                             [x_w1,y_w1,z_w0],[x_w0,y_w1,z_w0],
+                             [x_w1,y_w0,z_w0],[x_w0,y_w0,z_w0]])
          weights = np.sqrt((weights**2).sum(axis = 1))
          min_index = weights.argmin()
          if weights[min_index] == 0:
@@ -547,22 +547,22 @@ def node2r_njit(node_data, r, dims):
 
       if node_data.ndim == 3:
          r_data[ii] += weights[0]*node_data[z_locs_l, y_locs_l, x_locs_l]
-         r_data[ii] += weights[1]*node_data[z_locs_r, y_locs_l, x_locs_l]
+         r_data[ii] += weights[1]*node_data[z_locs_l, y_locs_l, x_locs_r]
          r_data[ii] += weights[2]*node_data[z_locs_l, y_locs_r, x_locs_l]
-         r_data[ii] += weights[3]*node_data[z_locs_r, y_locs_r, x_locs_l]
-         r_data[ii] += weights[4]*node_data[z_locs_l, y_locs_l, x_locs_r]
+         r_data[ii] += weights[3]*node_data[z_locs_l, y_locs_r, x_locs_r]
+         r_data[ii] += weights[4]*node_data[z_locs_r, y_locs_l, x_locs_l]
          r_data[ii] += weights[5]*node_data[z_locs_r, y_locs_l, x_locs_r]
-         r_data[ii] += weights[6]*node_data[z_locs_l, y_locs_r, x_locs_r]
+         r_data[ii] += weights[6]*node_data[z_locs_r, y_locs_r, x_locs_l]
          r_data[ii] += weights[7]*node_data[z_locs_r, y_locs_r, x_locs_r]
       elif node_data.ndim == 4:
          for nn in range(3):
             r_data[ii,nn] += weights[0]*node_data[z_locs_l, y_locs_l, x_locs_l,nn]
-            r_data[ii,nn] += weights[1]*node_data[z_locs_r, y_locs_l, x_locs_l,nn]
+            r_data[ii,nn] += weights[1]*node_data[z_locs_l, y_locs_l, x_locs_r,nn]
             r_data[ii,nn] += weights[2]*node_data[z_locs_l, y_locs_r, x_locs_l,nn]
-            r_data[ii,nn] += weights[3]*node_data[z_locs_r, y_locs_r, x_locs_l,nn]
-            r_data[ii,nn] += weights[4]*node_data[z_locs_l, y_locs_l, x_locs_r,nn]
+            r_data[ii,nn] += weights[3]*node_data[z_locs_l, y_locs_r, x_locs_r,nn]
+            r_data[ii,nn] += weights[4]*node_data[z_locs_r, y_locs_l, x_locs_l,nn]
             r_data[ii,nn] += weights[5]*node_data[z_locs_r, y_locs_l, x_locs_r,nn]
-            r_data[ii,nn] += weights[6]*node_data[z_locs_l, y_locs_r, x_locs_r,nn]
+            r_data[ii,nn] += weights[6]*node_data[z_locs_r, y_locs_r, x_locs_l,nn]
             r_data[ii,nn] += weights[7]*node_data[z_locs_r, y_locs_r, x_locs_r,nn]
    
    return r_data

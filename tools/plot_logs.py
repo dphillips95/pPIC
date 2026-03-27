@@ -116,25 +116,28 @@ def find_tickStep(maxCrdRange, min_ticks = 5, max_ticks = 15, bias = 'min'):
 
 def plotFigure(t_data, var_data, var_label, unit = None, rescale_x = True, rescale_y = False, log = False):
    # Generate single dataset figure
-
    fig = Figure(figsize = figureSize, frameon = True, layout = "compressed")
 
    ax = fig.subplots(nrows = 1, ncols = 1, squeeze = False)[0,0]
 
    xRange = np.array((np.min(t_data).item(),np.max(t_data).item()))
    if log is True:
-      yRange = yRange = np.array((np.min(var_data.where(var_data > 0.0)).item(),np.max(var_data).item()))
+      yRange = yRange = np.array((np.min(var_data.where(var_data > 0.0)).item(),np.max(var_data.where(var_data > 0.0)).item()))
    else:
       yRange = np.array((np.min(var_data).item(),np.max(var_data).item()))
-
-   if yRange[1] == yRange[0]:
-      if yRange[0] == 0:
-         yRange[0] -= 0.05
-         yRange[1] += 0.05
+   
+   if any(np.isnan(yRange)):
+      yRange[0] = -0.05
+      yRange[1] = 0.05
+   elif 1 - yRange[0]/yRange[1] < 1e-15:
+      mid = np.mean(yRange)
+      if mid == 0:
+         diff = 0.05
       else:
-         yRange[0] -= yRange[0]*0.05
-         yRange[1] += yRange[1]*0.05
-
+         diff = 0.05*mid
+      yRange[0] = mid - diff*0.05
+      yRange[1] = mid + diff*0.05
+   
    x_pts = np.linspace(*xRange)
    y_pts = 1e-8 * np.exp(0.35*math.sqrt(2*314208961640850*const.e**2/(const.m_e*const.epsilon_0))*x_pts)
          
@@ -154,7 +157,7 @@ def plotFigure(t_data, var_data, var_label, unit = None, rescale_x = True, resca
    else:
       y_log = 0
 
-   xRange,xLocators = get_MultLocators(*xRange)
+   _,xLocators = get_MultLocators(*xRange)
    if log is True:
       try:
          yRange,yLocators = get_LogLocators(*yRange)
@@ -341,7 +344,7 @@ for fig_name in fig_list:
    elif fig_name == "maxCellJ_mag":
       figs.append(plotFigure(logs.t, logs.maxCellJ_mag, "max(|cellJ|)", r"A/m$^3$"))
    elif fig_name == "total_energy":
-      figs.append(plotFigure(logs.t, logs.total_energy, "Total Energy", "J", log = True))
+      figs.append(plotFigure(logs.t, logs.total_energy, "Total Energy", "J"))
    else:
       for pop in pop_list:
          if fig_name == "Np":
