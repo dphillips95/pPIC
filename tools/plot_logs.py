@@ -300,7 +300,7 @@ fig_list = [
    "total_energy"
 ]
 
-fig_list = ["energy_E"]
+fig_list = ["energy_B", "energy_E", "KE", "total_energy"]
 
 var_list = logs.keys()
 pop_list = (x[:-13] for x in var_list if x.endswith("_avgCellU_mag"))

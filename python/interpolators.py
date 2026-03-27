@@ -1,10 +1,12 @@
 # Module of interpolators
 import math
 import numpy as np
+import scipy.constants as const
 from numba import njit
 from numba import int64,float64
+# from numpy import int64,float64
 
-from indexers import arr_shift,split_axis,arr_shift_njit,CIC_weights_node,CIC_weights_cell
+from indexers import arr_shift,arr_diff,split_axis,arr_shift_njit,arr_diff_njit,CIC_weights_node,CIC_weights_cell,get_index,get_index_njit
 
 def face2cell(face_data, dims):
    # Interpolates data from cell faces to centre
@@ -21,7 +23,7 @@ def face2cell(face_data, dims):
    
    return cell_data
 
-@njit(cache = True, fastmath = True)
+@njit(cache = True)#, fastmath = True)
 def face2cell_njit(face_data, dims):
    # Interpolates data from cell faces to centre
    # Data is assumed to be vector data
@@ -67,7 +69,7 @@ def cell2node(cell_data, dims):
 
    return node_data
 
-@njit(cache = True, fastmath = True)
+@njit(cache = True)#, fastmath = True)
 def cell2node_njit(cell_data, dims):
    # Interpolates data from cell centres to nodes
    node_data = cell_data.copy()
@@ -145,7 +147,7 @@ def face2node(face_data, dims):
    
    return node_data
 
-@njit(cache = True, fastmath = True)
+@njit(cache = True)#, fastmath = True)
 def face2node_njit(face_data, dims):
    # Interpolate face data to node
    # Data is assumed to be vector data, face data only stores one component each
@@ -214,7 +216,7 @@ def node2cell(node_data, dims):
    
    return cell_data
 
-@njit(cache = True, fastmath = True)
+@njit(cache = True)#, fastmath = True)
 def node2cell_njit(node_data, dims):
    # Interpolate node data to cell centres
    cell_data = node_data.copy()
@@ -292,7 +294,7 @@ def node2face(node_data, dims):
    
    return face_data
 
-@njit(cache = True, fastmath = True)
+@njit(cache = True)#, fastmath = True)
 def node2face_njit(node_data, dims):
    # Interpolate node data to face
    # Data is assumed to be vector data, face data only stores one component each
@@ -350,7 +352,7 @@ def cell2face(cell_data, dims):
    
    return face_data
 
-@njit(cache = True, fastmath = True)
+@njit(cache = True)#, fastmath = True)
 def cell2face_njit(cell_data, dims):
    # Interpolates data from cell centres to faces
    # Data is assumed to be vector data, face data only stores one component each
@@ -391,7 +393,7 @@ def face2r(face_data, r, dims):
    
    return r_data
 
-@njit(cache = True, fastmath = True)
+@njit(cache = True)#, fastmath = True)
 def face2r_njit(face_data, r, dims):
    # Interpolate face data to arbitrary position(s) r
    # Data is assumed to be vector data, face data only stores one component each
@@ -487,7 +489,7 @@ def node2r(node_data, r, dims):
    
    return r_data
 
-@njit(cache = True, fastmath = True)
+@njit(cache = True)#, fastmath = True)
 def node2r_njit(node_data, r, dims):
    # Interpolate node data to arbitrary position(s) r
    if r.ndim == 1:
@@ -628,7 +630,7 @@ def cell2r(cell_data, r, dims):
    
    return r_data
 
-@njit(cache = True, fastmath = True)
+@njit(cache = True)#, fastmath = True)
 def cell2r_njit(cell_data, r, dims):
    # Interpolate cell data to arbitrary position(s) r
    # Interpolation is by default trilinear
@@ -731,3 +733,229 @@ def cell2r_njit(cell_data, r, dims):
          r_data[ii] += weights[7]*cell_data[z_locs_r, y_locs_r, x_locs_r]
    
    return r_data
+
+def curl_face2node(face_data, dims):
+   # Compute the curl of face data at nodes
+   # First computes edge curl then interpolates to node
+   node_curl = np.empty(dims.dim_vector, dtype = np.float64)
+   
+   xface_data,yface_data,zface_data = split_axis(face_data, axis = 3)
+
+   # Diff of y-face data in z-direction
+   ydiff_z = arr_diff(yface_data, 1, 0, dims.period)/dims.dz
+   # Diff of z-face data in y-direction
+   zdiff_y = arr_diff(zface_data, 1, 1, dims.period)/dims.dy
+
+   edgeJx = zdiff_y - ydiff_z
+   edgeJx += arr_shift(edgeJx, 1, 2, dims.period)
+
+   node_curl[:,:,:,0] = edgeJx
+   
+   # Diff of z-face data in x-direction
+   zdiff_x = arr_diff(zface_data, 1, 2, dims.period)/dims.dx
+   # Diff of x-face data in z-direction
+   xdiff_z = arr_diff(xface_data, 1, 0, dims.period)/dims.dz
+
+   edgeJy = xdiff_z - zdiff_x
+   edgeJy += arr_shift(edgeJy, 1, 1, dims.period)
+
+   node_curl[:,:,:,1] = edgeJy
+   
+   # Diff of x-face data in y-direction
+   xdiff_y = arr_diff(xface_data, 1, 1, dims.period)/dims.dy
+   # Diff of y-face data in x-direction
+   ydiff_x = arr_diff(yface_data, 1, 2, dims.period)/dims.dx
+
+   edgeJz = ydiff_x - xdiff_y
+   edgeJz += arr_shift(edgeJz, 1, 0, dims.period)
+
+   node_curl[:,:,:,2] = edgeJz
+   
+   node_curl *= 0.5
+   
+   return node_curl
+
+@njit(cache = True)#, fastmath = True)
+def curl_face2node_njit(face_data, dims):
+   # Compute the curl of face data at nodes
+   # First computes edge curl then interpolates to node
+   dim_vector = (dims.dim_vector[0],dims.dim_vector[1],
+                 dims.dim_vector[2],dims.dim_vector[3])
+   node_curl = np.empty(dim_vector, dtype = float64)
+   shift = np.array([[-1,-1,0], [-1,0,-1], [-1,0,0], [0,-1,-1],
+                     [0,-1,0], [0,0,-1], [0,0,0]], dtype = int64)
+   
+   for kk in range(dims.z_size):
+      for jj in range(dims.y_size):
+         for ii in range(dims.x_size):
+            base_node = np.array((kk,jj,ii), dtype = int64)
+            shift_indices = get_index_njit(base_node, shift, dims)
+            sub_data = np.empty((7,3), dtype = float64)
+            for nn in range(7):
+               curr_ind = shift_indices[nn]
+               sub_data[nn] = face_data[curr_ind[0],curr_ind[1],curr_ind[2]]
+            
+            node_curl[kk,jj,ii,0] = (sub_data[1,1] - sub_data[5,1])/dims.dz
+            node_curl[kk,jj,ii,0] += (sub_data[5,2] - sub_data[3,2])/dims.dy
+            node_curl[kk,jj,ii,0] += (sub_data[2,1] - sub_data[6,1])/dims.dz
+            node_curl[kk,jj,ii,0] += (sub_data[6,2] - sub_data[4,2])/dims.dy
+
+            node_curl[kk,jj,ii,1] = (sub_data[3,2] - sub_data[4,2])/dims.dx
+            node_curl[kk,jj,ii,1] += (sub_data[4,0] - sub_data[0,0])/dims.dz
+            node_curl[kk,jj,ii,1] += (sub_data[5,2] - sub_data[6,2])/dims.dx
+            node_curl[kk,jj,ii,1] += (sub_data[6,0] - sub_data[2,0])/dims.dz
+
+            node_curl[kk,jj,ii,2] = (sub_data[0,0] - sub_data[2,0])/dims.dy
+            node_curl[kk,jj,ii,2] += (sub_data[2,1] - sub_data[1,1])/dims.dx
+            node_curl[kk,jj,ii,2] += (sub_data[4,0] - sub_data[6,0])/dims.dy
+            node_curl[kk,jj,ii,2] += (sub_data[6,1] - sub_data[5,1])/dims.dx
+   
+   node_curl *= 0.5
+   
+   return node_curl
+
+@njit(cache = True)#, fastmath = True)
+def curl_face2node_njit_alt(face_data, dims):
+   # Compute the curl of face data at nodes
+   # First computes edge curl then interpolates to node
+   dim_vector = (dims.dim_vector[0],dims.dim_vector[1],
+                 dims.dim_vector[2],dims.dim_vector[3])
+   node_curl = np.empty(dim_vector, dtype = float64)
+   
+   # Diff of y-face data in z-direction
+   ydiff_z = arr_diff_njit(face_data[:,:,:,1], 1, 0, dims.period)/dims.dz
+   # Diff of z-face data in y-direction
+   zdiff_y = arr_diff_njit(face_data[:,:,:,2], 1, 1, dims.period)/dims.dy
+   
+   edgeJx = zdiff_y - ydiff_z
+   shift_x = arr_shift_njit(edgeJx, 1, 2, dims.period)
+   for kk in range(dims.z_size):
+      for jj in range(dims.y_size):
+         for ii in range(dims.x_size):
+            node_curl[kk,jj,ii,0] = edgeJx[kk,jj,ii] + shift_x[kk,jj,ii]
+   
+   # Diff of z-face data in x-direction
+   zdiff_x = arr_diff_njit(face_data[:,:,:,2], 1, 2, dims.period)/dims.dx
+   # Diff of x-face data in z-direction
+   xdiff_z = arr_diff_njit(face_data[:,:,:,0], 1, 0, dims.period)/dims.dz
+
+   edgeJy = xdiff_z - zdiff_x
+   shift_y = arr_shift_njit(edgeJy, 1, 1, dims.period)
+   for kk in range(dims.z_size):
+      for jj in range(dims.y_size):
+         for ii in range(dims.x_size):
+            node_curl[kk,jj,ii,1] = edgeJy[kk,jj,ii] + shift_y[kk,jj,ii]
+   
+   # Diff of x-face data in y-direction
+   xdiff_y = arr_diff_njit(face_data[:,:,:,0], 1, 1, dims.period)/dims.dy
+   # Diff of y-face data in x-direction
+   ydiff_x = arr_diff_njit(face_data[:,:,:,1], 1, 2, dims.period)/dims.dx
+
+   edgeJz = ydiff_x - xdiff_y
+   shift_z = arr_shift_njit(edgeJz, 1, 0, dims.period)
+   for kk in range(dims.z_size):
+      for jj in range(dims.y_size):
+         for ii in range(dims.x_size):
+            node_curl[kk,jj,ii,2] = edgeJz[kk,jj,ii] + shift_z[kk,jj,ii]
+   
+   node_curl *= 0.5
+   
+   return node_curl
+
+def curl_node2face(node_data, dims):
+   # Compute the curl of node data at faces
+   face_curl = np.zeros(dims.dim_vector, dtype = np.float64)
+   
+   xnode_data,ynode_data,znode_data = split_axis(node_data, axis = 3)
+
+   xmean_x = (xnode_data + arr_shift(xnode_data, -1, 2, dims.period))/2
+   ymean_y = (ynode_data + arr_shift(ynode_data, -1, 1, dims.period))/2
+   zmean_z = (znode_data + arr_shift(znode_data, -1, 0, dims.period))/2
+   
+   ymean_y_diff_z = arr_diff(ymean_y, -1, 0, dims.period)/dims.dz
+   zmean_z_diff_y = arr_diff(zmean_z, -1, 1, dims.period)/dims.dy
+   
+   face_curl[:,:,:,0] += ymean_y_diff_z
+   face_curl[:,:,:,0] -= zmean_z_diff_y
+   
+   zmean_z_diff_x = arr_diff(zmean_z, -1, 2, dims.period)/dims.dx
+   xmean_x_diff_z = arr_diff(xmean_x, -1, 0, dims.period)/dims.dz
+   
+   face_curl[:,:,:,1] += zmean_z_diff_x
+   face_curl[:,:,:,1] -= xmean_x_diff_z
+   
+   xmean_x_diff_y = arr_diff(xmean_x, -1, 1, dims.period)/dims.dy
+   ymean_y_diff_x = arr_diff(ymean_y, -1, 2, dims.period)/dims.dx
+   
+   face_curl[:,:,:,2] += xmean_x_diff_y
+   face_curl[:,:,:,2] -= ymean_y_diff_x
+   
+   return face_curl
+
+@njit(cache = True)#, fastmath = True)
+def curl_node2face_njit_alt(node_data, dims):
+   # Compute the curl of node data at faces
+   dim_vector = (dims.dim_vector[0],dims.dim_vector[1],
+                 dims.dim_vector[2],dims.dim_vector[3])
+   face_curl = np.empty(dim_vector, dtype = float64)
+   shift = np.array([[0,0,0], [0,0,1], [0,1,0], [0,1,1],
+                     [1,0,0], [1,0,1], [1,1,0]], dtype = int64)
+   
+   for kk in range(dims.z_size):
+      for jj in range(dims.y_size):
+         for ii in range(dims.x_size):
+            base_node = np.array((kk,jj,ii), dtype = int64)
+            shift_indices = get_index_njit(base_node, shift, dims)
+            sub_data = np.empty((7,3), dtype = float64)
+            for nn in range(7):
+               curr_ind = shift_indices[nn]
+               sub_data[nn] = node_data[curr_ind[0],curr_ind[1],curr_ind[2]]
+            face_curl[kk,jj,ii,0] = (sub_data[0,1] + sub_data[2,1])/dims.dz
+            face_curl[kk,jj,ii,0] += (sub_data[2,2] + sub_data[6,2])/dims.dy
+            face_curl[kk,jj,ii,0] -= (sub_data[6,1] + sub_data[4,1])/dims.dz
+            face_curl[kk,jj,ii,0] -= (sub_data[4,2] + sub_data[0,2])/dims.dy
+            
+            face_curl[kk,jj,ii,1] = (sub_data[0,2] + sub_data[4,2])/dims.dx
+            face_curl[kk,jj,ii,1] += (sub_data[4,0] + sub_data[5,0])/dims.dz
+            face_curl[kk,jj,ii,1] -= (sub_data[5,2] + sub_data[1,2])/dims.dx
+            face_curl[kk,jj,ii,1] -= (sub_data[1,0] + sub_data[0,0])/dims.dz
+            
+            face_curl[kk,jj,ii,2] = (sub_data[0,0] + sub_data[1,0])/dims.dy
+            face_curl[kk,jj,ii,2] += (sub_data[1,1] + sub_data[3,1])/dims.dx
+            face_curl[kk,jj,ii,2] -= (sub_data[3,0] + sub_data[2,0])/dims.dy
+            face_curl[kk,jj,ii,2] -= (sub_data[2,1] + sub_data[0,1])/dims.dx
+   
+   face_curl *= 0.5
+   
+   return face_curl
+
+@njit(cache = True)#, fastmath = True)
+def curl_node2face_njit(node_data, dims):
+   # Compute the curl of node data at faces
+   dim_vector = (dims.dim_vector[0],dims.dim_vector[1],
+                 dims.dim_vector[2],dims.dim_vector[3])
+   face_curl = np.zeros(dim_vector, dtype = float64)
+   
+   xmean_x = (node_data[:,:,:,0] + arr_shift_njit(node_data[:,:,:,0], -1, 2, dims.period))/2
+   ymean_y = (node_data[:,:,:,1] + arr_shift_njit(node_data[:,:,:,1], -1, 1, dims.period))/2
+   zmean_z = (node_data[:,:,:,2] + arr_shift_njit(node_data[:,:,:,2], -1, 0, dims.period))/2
+   
+   ymean_y_diff_z = arr_diff_njit(ymean_y, -1, 0, dims.period)/dims.dz
+   zmean_z_diff_y = arr_diff_njit(zmean_z, -1, 1, dims.period)/dims.dy
+   
+   face_curl[:,:,:,0] += ymean_y_diff_z
+   face_curl[:,:,:,0] -= zmean_z_diff_y
+   
+   zmean_z_diff_x = arr_diff_njit(zmean_z, -1, 2, dims.period)/dims.dx
+   xmean_x_diff_z = arr_diff_njit(xmean_x, -1, 0, dims.period)/dims.dz
+   
+   face_curl[:,:,:,1] += zmean_z_diff_x
+   face_curl[:,:,:,1] -= xmean_x_diff_z
+   
+   xmean_x_diff_y = arr_diff_njit(xmean_x, -1, 1, dims.period)/dims.dy
+   ymean_y_diff_x = arr_diff_njit(ymean_y, -1, 2, dims.period)/dims.dx
+   
+   face_curl[:,:,:,2] += xmean_x_diff_y
+   face_curl[:,:,:,2] -= ymean_y_diff_x
+   
+   return face_curl

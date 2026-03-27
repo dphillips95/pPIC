@@ -163,7 +163,7 @@ def compute_alpha(pop, faceB, dims):
    # Compute alpha matrix for all particles in population
    rB = face2r(faceB, pop.r, dims)
    
-   beta = (pop.q*dims.dt)/(2*pop.m)
+   beta = dims.phi*(pop.q*dims.dt)/pop.m
 
    bx,by,bz = split_axis(rB*beta, axis = 1)
 
@@ -197,9 +197,11 @@ def Lorentz(pop, midNodeE, dims):
    # Accelerate particles via Lorentz force
    rE = node2r(midNodeE, pop.r, dims)
    
-   beta = (pop.q*dims.dt)/(2*pop.m)
+   beta = dims.phi*(pop.q*dims.dt)/pop.m
+
+   v_phi = np.matvec(pop.alpha, (pop.v + beta*rE))
    
-   pop.v = 2*np.matvec(pop.alpha, (pop.v + beta*rE)) - pop.v
+   pop.v = (v_phi - (1-dims.phi)*pop.v)/dims.phi
    
    # for ii,(v,alpha,E) in enumerate(zip(pop.v,pop.alpha,rE)):
    #    new_v = 2*alpha@(v + beta*E) - v
@@ -339,7 +341,7 @@ def compute_mass_matrices(pop, dims):
                         M[:,:,(zi*dims.y_size + yi)*dims.x_size + xi,
                           (zj*dims.y_size + yj)*dims.x_size + xj] += (x_wi*x_wj*y_wi*y_wj*z_wi*z_wj).reshape(1,1,-1) * alpha
 
-   beta = (pop.q*dims.dt)/(2*pop.m)
+   beta = dims.phi*(pop.q*dims.dt)/pop.m
    M *= beta * pop.q*pop.w/dims.dV
 
    return M
@@ -547,7 +549,7 @@ def compute_alpha_njit(pop, faceB, dims):
    # Compute alpha matrix for all particles in population
    rB = face2r_njit(faceB, pop.r, dims)
 
-   beta = (pop.q*dims.dt)/(2*pop.m)
+   beta = dims.phi*(pop.q*dims.dt)/pop.m
 
    bx,by,bz = split_axis(rB*beta, axis = 1)
 
@@ -583,7 +585,7 @@ def Lorentz_njit(r, v, alpha, q, m, midNodeE, dims):
    # Accelerate particles via Lorentz force
    rE = node2r_njit(midNodeE, r, dims)
 
-   beta = (q*dims.dt)/(2*m)
+   beta = dims.phi*(q*dims.dt)/m
 
    new_v = np.zeros(v.shape, dtype = float64)
 
@@ -890,7 +892,7 @@ def compute_mass_matrices_njit(pop, dims):
                                  M[ii,jj,(zi*dims.y_size + yi)*dims.x_size + xi,
                                    (zj*dims.y_size + yj)*dims.x_size + xj] += x_wi*x_wj*y_wi*y_wj*z_wi*z_wj * alpha[ii,jj]
 
-   beta = (pop.q*dims.dt)/(2*pop.m)
+   beta = dims.phi*(pop.q*dims.dt)/pop.m
    M *= beta * pop.q*pop.w/dims.dV
 
    return M

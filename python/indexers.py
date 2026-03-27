@@ -3,6 +3,55 @@
 import numpy as np
 from numba import njit,int64
 
+def get_index(initial, relative_step, dims):
+   # Find index starting from initial index with relative step away
+   # e.g. if index is (4,5,1) and relative_step is (0,0,2), return (4,5,3)
+   # if axis is periodic then index is wrapped, else sticks to edge
+   # e.g. if for last example. dims were (5,6,3) periodic, return (4,5,0)
+   # and if non-periodic, return (4,5,2)
+   # relative_step should be list
+   new_ind = np.tile(initial, (relative_step.shape[0], 1))
+   new_ind += relative_step
+   if dims.period[0]:
+      new_ind[:,0] = np.mod(new_ind[:,0], dims.z_size)
+   else:
+      new_ind[:,0] = np.clip(new_ind[:,0], 0, dims.z_size - 1)
+   if dims.period[1]:
+      new_ind[:,1] = np.mod(new_ind[:,1], dims.y_size)
+   else:
+      new_ind[:,1] = np.clip(new_ind[:,1], 0, dims.y_size - 1)
+   if dims.period[0]:
+      new_ind[:,2] = np.mod(new_ind[:,2], dims.x_size)
+   else:
+      new_ind[:,2] = np.clip(new_ind[:,2], 0, dims.x_size - 1)
+
+   return new_ind
+
+@njit(cache = True)#, fastmath = True)
+def get_index_njit(initial, relative_step, dims):
+   # Find index starting from initial index with relative step away
+   # e.g. if index is (4,5,1) and relative_step is (0,0,2), return (4,5,3)
+   # if axis is periodic then index is wrapped, else sticks to edge
+   # e.g. if for last example. dims were (5,6,3) periodic, return (4,5,0)
+   # and if non-periodic, return (4,5,2)
+   # relative_step should be 2d array, each row is a different step
+   new_ind = np.empty(relative_step.shape, dtype = initial.dtype)
+   for ii in range(relative_step.shape[0] + 1):
+      if dims.period[0]:
+         new_ind[ii,0] = (initial[0] + relative_step[ii][0])%dims.z_size
+      else:
+         new_ind[ii,0] = min(max(new_ind[ii,0], 0), dims.z_size - 1)
+      if dims.period[1]:
+         new_ind[ii,1] = (initial[1] + relative_step[ii][1])%dims.y_size
+      else:
+         new_ind[ii,1] = min(max(new_ind[ii,1], 0), dims.y_size - 1)
+      if dims.period[0]:
+         new_ind[ii,2] = (initial[2] + relative_step[ii][2])%dims.x_size
+      else:
+         new_ind[ii,2] = min(max(new_ind[ii,2], 0), dims.x_size - 1)
+
+   return new_ind
+
 def split_axis(arr, axis, keep_dim = False):
    # Splits numpy array along axis into one array per axis index
    # If keep_dim is False the split axis is dropped from the array dimensions
@@ -84,6 +133,23 @@ def arr_shift_njit(arr, shift, axis, periodicity):
       sh_arr = slide_array(arr, shift, axis)
    
    return sh_arr
+
+def arr_diff(arr, shift, axis, periodicity):
+   # Shift array then take difference from original
+   diff_arr = arr.copy()
+   
+   diff_arr -= arr_shift(arr, shift, axis, periodicity)
+
+   return diff_arr
+
+@njit(cache = True, fastmath = True)
+def arr_diff_njit(arr, shift, axis, periodicity):
+   # Shift array then take difference from original
+   diff_arr = arr.copy()
+   
+   diff_arr -= arr_shift_njit(arr, shift, axis, periodicity)
+
+   return diff_arr
 
 @njit(cache = True, fastmath = True)
 def slide_array(arr, shift, axis):
