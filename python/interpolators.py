@@ -47,21 +47,21 @@ def cell2node(cell_data, dims):
    # Interpolates data from cell centres to nodes
    node_data = cell_data.copy()
    
-   shift_0 = arr_shift(cell_data, 1, 0, dims.period)
-   shift_1 = arr_shift(cell_data, 1, 1, dims.period)
-   shift_2 = arr_shift(cell_data, 1, 2, dims.period)
-   shift_01 = arr_shift(shift_0, 1, 1, dims.period)
-   shift_02 = arr_shift(shift_2, 1, 0, dims.period)
-   shift_12 = arr_shift(shift_1, 1, 2, dims.period)
-   shift_012 = arr_shift(shift_01, 1, 2, dims.period)
+   shift_x = arr_shift(cell_data, 1, 0, dims.period)
+   shift_y = arr_shift(cell_data, 1, 1, dims.period)
+   shift_z = arr_shift(cell_data, 1, 2, dims.period)
+   shift_xy = arr_shift(shift_x, 1, 1, dims.period)
+   shift_xz = arr_shift(shift_z, 1, 0, dims.period)
+   shift_yz = arr_shift(shift_y, 1, 2, dims.period)
+   shift_xyz = arr_shift(shift_xy, 1, 2, dims.period)
    
-   node_data += shift_0
-   node_data += shift_1
-   node_data += shift_2
-   node_data += shift_01
-   node_data += shift_02
-   node_data += shift_12
-   node_data += shift_012
+   node_data += shift_x
+   node_data += shift_y
+   node_data += shift_z
+   node_data += shift_xy
+   node_data += shift_xz
+   node_data += shift_yz
+   node_data += shift_xyz
    
    node_data *= 0.125
 
@@ -72,13 +72,13 @@ def cell2node_njit(cell_data, dims):
    # Interpolates data from cell centres to nodes
    node_data = cell_data.copy()
    
-   shift_0 = arr_shift_njit(cell_data, 1, 0, dims.period)
-   shift_1 = arr_shift_njit(cell_data, 1, 1, dims.period)
-   shift_2 = arr_shift_njit(cell_data, 1, 2, dims.period)
-   shift_01 = arr_shift_njit(shift_0, 1, 1, dims.period)
-   shift_02 = arr_shift_njit(shift_2, 1, 0, dims.period)
-   shift_12 = arr_shift_njit(shift_1, 1, 2, dims.period)
-   shift_012 = arr_shift_njit(shift_01, 1, 2, dims.period)
+   shift_x = arr_shift_njit(cell_data, 1, 0, dims.period)
+   shift_y = arr_shift_njit(cell_data, 1, 1, dims.period)
+   shift_z = arr_shift_njit(cell_data, 1, 2, dims.period)
+   shift_xy = arr_shift_njit(shift_x, 1, 1, dims.period)
+   shift_xz = arr_shift_njit(shift_z, 1, 0, dims.period)
+   shift_yz = arr_shift_njit(shift_y, 1, 2, dims.period)
+   shift_xyz = arr_shift_njit(shift_xy, 1, 2, dims.period)
    
    shape = cell_data.shape
 
@@ -86,25 +86,25 @@ def cell2node_njit(cell_data, dims):
       for kk in range(shape[0]):
          for jj in range(shape[1]):
             for ii in range(shape[2]):
-               node_data[kk,jj,ii] += shift_0[kk,jj,ii]
-               node_data[kk,jj,ii] += shift_1[kk,jj,ii]
-               node_data[kk,jj,ii] += shift_2[kk,jj,ii]
-               node_data[kk,jj,ii] += shift_01[kk,jj,ii]
-               node_data[kk,jj,ii] += shift_02[kk,jj,ii]
-               node_data[kk,jj,ii] += shift_12[kk,jj,ii]
-               node_data[kk,jj,ii] += shift_012[kk,jj,ii]
+               node_data[kk,jj,ii] += shift_x[kk,jj,ii]
+               node_data[kk,jj,ii] += shift_y[kk,jj,ii]
+               node_data[kk,jj,ii] += shift_z[kk,jj,ii]
+               node_data[kk,jj,ii] += shift_xy[kk,jj,ii]
+               node_data[kk,jj,ii] += shift_xz[kk,jj,ii]
+               node_data[kk,jj,ii] += shift_yz[kk,jj,ii]
+               node_data[kk,jj,ii] += shift_xyz[kk,jj,ii]
    elif cell_data.ndim == 4:
       for kk in range(shape[0]):
          for jj in range(shape[1]):
             for ii in range(shape[2]):
                for nn in range(3):
-                  node_data[kk,jj,ii,nn] += shift_0[kk,jj,ii,nn]
-                  node_data[kk,jj,ii,nn] += shift_1[kk,jj,ii,nn]
-                  node_data[kk,jj,ii,nn] += shift_2[kk,jj,ii,nn]
-                  node_data[kk,jj,ii,nn] += shift_01[kk,jj,ii,nn]
-                  node_data[kk,jj,ii,nn] += shift_02[kk,jj,ii,nn]
-                  node_data[kk,jj,ii,nn] += shift_12[kk,jj,ii,nn]
-                  node_data[kk,jj,ii,nn] += shift_012[kk,jj,ii,nn]
+                  node_data[kk,jj,ii,nn] += shift_x[kk,jj,ii,nn]
+                  node_data[kk,jj,ii,nn] += shift_y[kk,jj,ii,nn]
+                  node_data[kk,jj,ii,nn] += shift_z[kk,jj,ii,nn]
+                  node_data[kk,jj,ii,nn] += shift_xy[kk,jj,ii,nn]
+                  node_data[kk,jj,ii,nn] += shift_xz[kk,jj,ii,nn]
+                  node_data[kk,jj,ii,nn] += shift_yz[kk,jj,ii,nn]
+                  node_data[kk,jj,ii,nn] += shift_xyz[kk,jj,ii,nn]
    
    node_data *= 0.125
 
@@ -117,29 +117,29 @@ def face2node(face_data, dims):
    
    xface_data,yface_data,zface_data = split_axis(face_data, axis = 3)
    
-   shift_0 = arr_shift(xface_data, 1, 0, dims.period)
-   shift_1 = arr_shift(xface_data, 1, 1, dims.period)
-   shift_01 = arr_shift(shift_0, 1, 1, dims.period)
+   shift_x = arr_shift(xface_data, 1, 0, dims.period)
+   shift_y = arr_shift(xface_data, 1, 1, dims.period)
+   shift_xy = arr_shift(shift_x, 1, 1, dims.period)
 
-   node_data[:,:,:,0] += shift_0
-   node_data[:,:,:,0] += shift_1
-   node_data[:,:,:,0] += shift_01
+   node_data[:,:,:,0] += shift_x
+   node_data[:,:,:,0] += shift_y
+   node_data[:,:,:,0] += shift_xy
 
-   shift_0 = arr_shift(yface_data, 1, 0, dims.period)
-   shift_2 = arr_shift(yface_data, 1, 2, dims.period)
-   shift_02 = arr_shift(shift_0, 1, 2, dims.period)
+   shift_x = arr_shift(yface_data, 1, 0, dims.period)
+   shift_z = arr_shift(yface_data, 1, 2, dims.period)
+   shift_xz = arr_shift(shift_x, 1, 2, dims.period)
 
-   node_data[:,:,:,1] += shift_0
-   node_data[:,:,:,1] += shift_2
-   node_data[:,:,:,1] += shift_02
+   node_data[:,:,:,1] += shift_x
+   node_data[:,:,:,1] += shift_z
+   node_data[:,:,:,1] += shift_xz
 
-   shift_1 = arr_shift(zface_data, 1, 1, dims.period)
-   shift_2 = arr_shift(zface_data, 1, 2, dims.period)
-   shift_12 = arr_shift(shift_1, 1, 2, dims.period)
+   shift_y = arr_shift(zface_data, 1, 1, dims.period)
+   shift_z = arr_shift(zface_data, 1, 2, dims.period)
+   shift_yz = arr_shift(shift_y, 1, 2, dims.period)
 
-   node_data[:,:,:,2] += shift_1
-   node_data[:,:,:,2] += shift_2
-   node_data[:,:,:,2] += shift_12
+   node_data[:,:,:,2] += shift_y
+   node_data[:,:,:,2] += shift_z
+   node_data[:,:,:,2] += shift_yz
    
    node_data *= 0.25
    
@@ -153,38 +153,38 @@ def face2node_njit(face_data, dims):
 
    shape = face_data.shape
    
-   shift_0 = arr_shift_njit(face_data[:,:,:,0], 1, 0, dims.period)
-   shift_1 = arr_shift_njit(face_data[:,:,:,0], 1, 1, dims.period)
-   shift_01 = arr_shift_njit(shift_0, 1, 1, dims.period)
+   shift_x = arr_shift_njit(face_data[:,:,:,0], 1, 0, dims.period)
+   shift_y = arr_shift_njit(face_data[:,:,:,0], 1, 1, dims.period)
+   shift_xy = arr_shift_njit(shift_x, 1, 1, dims.period)
 
    for kk in range(shape[0]):
       for jj in range(shape[1]):
          for ii in range(shape[2]):   
-            node_data[kk,jj,ii,0] += shift_0[kk,jj,ii]
-            node_data[kk,jj,ii,0] += shift_1[kk,jj,ii]
-            node_data[kk,jj,ii,0] += shift_01[kk,jj,ii]
+            node_data[kk,jj,ii,0] += shift_x[kk,jj,ii]
+            node_data[kk,jj,ii,0] += shift_y[kk,jj,ii]
+            node_data[kk,jj,ii,0] += shift_xy[kk,jj,ii]
    
-   shift_0 = arr_shift_njit(face_data[:,:,:,1], 1, 0, dims.period)
-   shift_2 = arr_shift_njit(face_data[:,:,:,1], 1, 2, dims.period)
-   shift_02 = arr_shift_njit(shift_0, 1, 2, dims.period)
+   shift_x = arr_shift_njit(face_data[:,:,:,1], 1, 0, dims.period)
+   shift_z = arr_shift_njit(face_data[:,:,:,1], 1, 2, dims.period)
+   shift_xz = arr_shift_njit(shift_x, 1, 2, dims.period)
 
    for kk in range(shape[0]):
       for jj in range(shape[1]):
          for ii in range(shape[2]):   
-            node_data[kk,jj,ii,1] += shift_0[kk,jj,ii]
-            node_data[kk,jj,ii,1] += shift_2[kk,jj,ii]
-            node_data[kk,jj,ii,1] += shift_02[kk,jj,ii]
+            node_data[kk,jj,ii,1] += shift_x[kk,jj,ii]
+            node_data[kk,jj,ii,1] += shift_z[kk,jj,ii]
+            node_data[kk,jj,ii,1] += shift_xz[kk,jj,ii]
 
-   shift_1 = arr_shift_njit(face_data[:,:,:,2], 1, 1, dims.period)
-   shift_2 = arr_shift_njit(face_data[:,:,:,2], 1, 2, dims.period)
-   shift_12 = arr_shift_njit(shift_1, 1, 2, dims.period)
+   shift_y = arr_shift_njit(face_data[:,:,:,2], 1, 1, dims.period)
+   shift_z = arr_shift_njit(face_data[:,:,:,2], 1, 2, dims.period)
+   shift_yz = arr_shift_njit(shift_y, 1, 2, dims.period)
 
    for kk in range(shape[0]):
       for jj in range(shape[1]):
          for ii in range(shape[2]):   
-            node_data[kk,jj,ii,2] += shift_1[kk,jj,ii]
-            node_data[kk,jj,ii,2] += shift_2[kk,jj,ii]
-            node_data[kk,jj,ii,2] += shift_12[kk,jj,ii]
+            node_data[kk,jj,ii,2] += shift_y[kk,jj,ii]
+            node_data[kk,jj,ii,2] += shift_z[kk,jj,ii]
+            node_data[kk,jj,ii,2] += shift_yz[kk,jj,ii]
    
    node_data *= 0.25
    
@@ -194,21 +194,21 @@ def node2cell(node_data, dims):
    # Interpolate node data to cell centres
    cell_data = node_data.copy()
    
-   shift_0 = arr_shift(node_data, -1, 0, dims.period)
-   shift_1 = arr_shift(node_data, -1, 1, dims.period)
-   shift_2 = arr_shift(node_data, -1, 2, dims.period)
-   shift_01 = arr_shift(shift_0, -1, 1, dims.period)
-   shift_02 = arr_shift(shift_2, -1, 0, dims.period)
-   shift_12 = arr_shift(shift_1, -1, 2, dims.period)
-   shift_012 = arr_shift(shift_01, -1, 2, dims.period)
+   shift_x = arr_shift(node_data, -1, 0, dims.period)
+   shift_y = arr_shift(node_data, -1, 1, dims.period)
+   shift_z = arr_shift(node_data, -1, 2, dims.period)
+   shift_xy = arr_shift(shift_x, -1, 1, dims.period)
+   shift_xz = arr_shift(shift_z, -1, 0, dims.period)
+   shift_yz = arr_shift(shift_y, -1, 2, dims.period)
+   shift_xyz = arr_shift(shift_xy, -1, 2, dims.period)
 
-   cell_data += shift_0
-   cell_data += shift_1
-   cell_data += shift_2
-   cell_data += shift_01
-   cell_data += shift_02
-   cell_data += shift_12
-   cell_data += shift_012
+   cell_data += shift_x
+   cell_data += shift_y
+   cell_data += shift_z
+   cell_data += shift_xy
+   cell_data += shift_xz
+   cell_data += shift_yz
+   cell_data += shift_xyz
    
    cell_data *= 0.125
    
@@ -221,37 +221,37 @@ def node2cell_njit(node_data, dims):
 
    shape = node_data.shape
    
-   shift_0 = arr_shift_njit(node_data, -1, 0, dims.period)
-   shift_1 = arr_shift_njit(node_data, -1, 1, dims.period)
-   shift_2 = arr_shift_njit(node_data, -1, 2, dims.period)
-   shift_01 = arr_shift_njit(shift_0, -1, 1, dims.period)
-   shift_02 = arr_shift_njit(shift_2, -1, 0, dims.period)
-   shift_12 = arr_shift_njit(shift_1, -1, 2, dims.period)
-   shift_012 = arr_shift_njit(shift_01, -1, 2, dims.period)
+   shift_x = arr_shift_njit(node_data, -1, 0, dims.period)
+   shift_y = arr_shift_njit(node_data, -1, 1, dims.period)
+   shift_z = arr_shift_njit(node_data, -1, 2, dims.period)
+   shift_xy = arr_shift_njit(shift_x, -1, 1, dims.period)
+   shift_xz = arr_shift_njit(shift_z, -1, 0, dims.period)
+   shift_yz = arr_shift_njit(shift_y, -1, 2, dims.period)
+   shift_xyz = arr_shift_njit(shift_xy, -1, 2, dims.period)
 
    if node_data.ndim == 3:
       for kk in range(shape[0]):
          for jj in range(shape[1]):
             for ii in range(shape[2]):
-               cell_data[kk,jj,ii] += shift_0[kk,jj,ii]
-               cell_data[kk,jj,ii] += shift_1[kk,jj,ii]
-               cell_data[kk,jj,ii] += shift_2[kk,jj,ii]
-               cell_data[kk,jj,ii] += shift_01[kk,jj,ii]
-               cell_data[kk,jj,ii] += shift_02[kk,jj,ii]
-               cell_data[kk,jj,ii] += shift_12[kk,jj,ii]
-               cell_data[kk,jj,ii] += shift_012[kk,jj,ii]
+               cell_data[kk,jj,ii] += shift_x[kk,jj,ii]
+               cell_data[kk,jj,ii] += shift_y[kk,jj,ii]
+               cell_data[kk,jj,ii] += shift_z[kk,jj,ii]
+               cell_data[kk,jj,ii] += shift_xy[kk,jj,ii]
+               cell_data[kk,jj,ii] += shift_xz[kk,jj,ii]
+               cell_data[kk,jj,ii] += shift_yz[kk,jj,ii]
+               cell_data[kk,jj,ii] += shift_xyz[kk,jj,ii]
    elif node_data.ndim == 4:
       for kk in range(shape[0]):
          for jj in range(shape[1]):
             for ii in range(shape[2]):
                for nn in range(3):
-                  cell_data[kk,jj,ii,nn] += shift_0[kk,jj,ii,nn]
-                  cell_data[kk,jj,ii,nn] += shift_1[kk,jj,ii,nn]
-                  cell_data[kk,jj,ii,nn] += shift_2[kk,jj,ii,nn]
-                  cell_data[kk,jj,ii,nn] += shift_01[kk,jj,ii,nn]
-                  cell_data[kk,jj,ii,nn] += shift_02[kk,jj,ii,nn]
-                  cell_data[kk,jj,ii,nn] += shift_12[kk,jj,ii,nn]
-                  cell_data[kk,jj,ii,nn] += shift_012[kk,jj,ii,nn]
+                  cell_data[kk,jj,ii,nn] += shift_x[kk,jj,ii,nn]
+                  cell_data[kk,jj,ii,nn] += shift_y[kk,jj,ii,nn]
+                  cell_data[kk,jj,ii,nn] += shift_z[kk,jj,ii,nn]
+                  cell_data[kk,jj,ii,nn] += shift_xy[kk,jj,ii,nn]
+                  cell_data[kk,jj,ii,nn] += shift_xz[kk,jj,ii,nn]
+                  cell_data[kk,jj,ii,nn] += shift_yz[kk,jj,ii,nn]
+                  cell_data[kk,jj,ii,nn] += shift_xyz[kk,jj,ii,nn]
    
    cell_data *= 0.125
    
@@ -264,29 +264,29 @@ def node2face(node_data, dims):
    
    xnode_data,ynode_data,znode_data = split_axis(node_data, axis = 3)
    
-   shift_0 = arr_shift(xnode_data, -1, 0, dims.period)
-   shift_1 = arr_shift(xnode_data, -1, 1, dims.period)
-   shift_01 = arr_shift(shift_0, -1, 1, dims.period)
+   shift_x = arr_shift(xnode_data, -1, 0, dims.period)
+   shift_y = arr_shift(xnode_data, -1, 1, dims.period)
+   shift_xy = arr_shift(shift_x, -1, 1, dims.period)
    
-   face_data[:,:,:,0] += shift_0
-   face_data[:,:,:,0] += shift_1
-   face_data[:,:,:,0] += shift_01
+   face_data[:,:,:,0] += shift_x
+   face_data[:,:,:,0] += shift_y
+   face_data[:,:,:,0] += shift_xy
 
-   shift_0 = arr_shift(ynode_data, -1, 0, dims.period)
-   shift_2 = arr_shift(ynode_data, -1, 2, dims.period)
-   shift_02 = arr_shift(shift_0, -1, 2, dims.period)
+   shift_x = arr_shift(ynode_data, -1, 0, dims.period)
+   shift_z = arr_shift(ynode_data, -1, 2, dims.period)
+   shift_xz = arr_shift(shift_x, -1, 2, dims.period)
    
-   face_data[:,:,:,1] += shift_0
-   face_data[:,:,:,1] += shift_2
-   face_data[:,:,:,1] += shift_02
+   face_data[:,:,:,1] += shift_x
+   face_data[:,:,:,1] += shift_z
+   face_data[:,:,:,1] += shift_xz
 
-   shift_1 = arr_shift(znode_data, -1, 1, dims.period)
-   shift_2 = arr_shift(znode_data, -1, 2, dims.period)
-   shift_12 = arr_shift(shift_1, -1, 2, dims.period)
+   shift_y = arr_shift(znode_data, -1, 1, dims.period)
+   shift_z = arr_shift(znode_data, -1, 2, dims.period)
+   shift_yz = arr_shift(shift_y, -1, 2, dims.period)
    
-   face_data[:,:,:,2] += shift_1
-   face_data[:,:,:,2] += shift_2
-   face_data[:,:,:,2] += shift_12
+   face_data[:,:,:,2] += shift_y
+   face_data[:,:,:,2] += shift_z
+   face_data[:,:,:,2] += shift_yz
    
    face_data *= 0.25
    
@@ -300,38 +300,38 @@ def node2face_njit(node_data, dims):
 
    shape = node_data.shape
    
-   shift_0 = arr_shift_njit(node_data[:,:,:,0], -1, 0, dims.period)
-   shift_1 = arr_shift_njit(node_data[:,:,:,0], -1, 1, dims.period)
-   shift_01 = arr_shift_njit(shift_0, -1, 1, dims.period)
+   shift_x = arr_shift_njit(node_data[:,:,:,0], -1, 0, dims.period)
+   shift_y = arr_shift_njit(node_data[:,:,:,0], -1, 1, dims.period)
+   shift_xy = arr_shift_njit(shift_x, -1, 1, dims.period)
 
    for kk in range(shape[0]):
       for jj in range(shape[1]):
          for ii in range(shape[2]):
-            face_data[kk,jj,ii,0] += shift_0[kk,jj,ii]
-            face_data[kk,jj,ii,0] += shift_1[kk,jj,ii]
-            face_data[kk,jj,ii,0] += shift_01[kk,jj,ii]
+            face_data[kk,jj,ii,0] += shift_x[kk,jj,ii]
+            face_data[kk,jj,ii,0] += shift_y[kk,jj,ii]
+            face_data[kk,jj,ii,0] += shift_xy[kk,jj,ii]
 
-   shift_0 = arr_shift_njit(node_data[:,:,:,1], -1, 0, dims.period)
-   shift_2 = arr_shift_njit(node_data[:,:,:,1], -1, 2, dims.period)
-   shift_02 = arr_shift_njit(shift_0, -1, 2, dims.period)
+   shift_x = arr_shift_njit(node_data[:,:,:,1], -1, 0, dims.period)
+   shift_z = arr_shift_njit(node_data[:,:,:,1], -1, 2, dims.period)
+   shift_xz = arr_shift_njit(shift_x, -1, 2, dims.period)
    
    for kk in range(shape[0]):
       for jj in range(shape[1]):
          for ii in range(shape[2]):
-            face_data[kk,jj,ii,1] += shift_0[kk,jj,ii]
-            face_data[kk,jj,ii,1] += shift_2[kk,jj,ii]
-            face_data[kk,jj,ii,1] += shift_02[kk,jj,ii]
+            face_data[kk,jj,ii,1] += shift_x[kk,jj,ii]
+            face_data[kk,jj,ii,1] += shift_z[kk,jj,ii]
+            face_data[kk,jj,ii,1] += shift_xz[kk,jj,ii]
 
-   shift_1 = arr_shift_njit(node_data[:,:,:,2], -1, 1, dims.period)
-   shift_2 = arr_shift_njit(node_data[:,:,:,2], -1, 2, dims.period)
-   shift_12 = arr_shift_njit(shift_1, -1, 2, dims.period)
+   shift_y = arr_shift_njit(node_data[:,:,:,2], -1, 1, dims.period)
+   shift_z = arr_shift_njit(node_data[:,:,:,2], -1, 2, dims.period)
+   shift_yz = arr_shift_njit(shift_y, -1, 2, dims.period)
    
    for kk in range(shape[0]):
       for jj in range(shape[1]):
          for ii in range(shape[2]):
-            face_data[kk,jj,ii,2] += shift_1[kk,jj,ii]
-            face_data[kk,jj,ii,2] += shift_2[kk,jj,ii]
-            face_data[kk,jj,ii,2] += shift_12[kk,jj,ii]
+            face_data[kk,jj,ii,2] += shift_y[kk,jj,ii]
+            face_data[kk,jj,ii,2] += shift_z[kk,jj,ii]
+            face_data[kk,jj,ii,2] += shift_yz[kk,jj,ii]
    
    face_data *= 0.25
    
