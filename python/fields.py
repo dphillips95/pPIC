@@ -10,7 +10,7 @@ class Fields:
    # faceB:     face magnetic fields
    # nodeB:     node magnetic fields
    # nodeE:     node electric field
-   def __init__(self, pops, B_types, B_init, E_types, E_init, dims):
+   def __init__(self, pops, B_types, B_init, E_types, E_init, rng, dims):
       # Initialise all fields
       print("")
       print("Initialising all fields")
@@ -46,6 +46,8 @@ class Fields:
             self.nodeE[:,:,:,0] += Ex
             self.nodeE[:,:,:,1] += Ey
             self.nodeE[:,:,:,2] += Ez
+         elif E_type == "rand":
+            self.nodeE = rng.uniform(-1, 1, dims.dim_vector)
       
       apply_boundaries_fields(self.nodeE, dims)
 
@@ -71,7 +73,10 @@ def upwind_fields(fields, xnext, dims):
       newNodeE = fields.nodeE.copy()
       newFaceB[:,:,:,0] = xnext[:dims.Ncells_total].reshape(dims.dim_scalar)
       newNodeE[:,:,:,0] = xnext[dims.Ncells_total:].reshape(dims.dim_scalar)
-
+   else:
+      newFaceB = xnext[:3*dims.Ncells_total].reshape(dims.dim_vector)
+      newNodeE = xnext[3*dims.Ncells_total:].reshape(dims.dim_vector)
+      
    apply_boundaries_fields((newFaceB,newNodeE), dims)
    
    midNodeE = dims.theta*newNodeE + (1-dims.theta)*fields.nodeE

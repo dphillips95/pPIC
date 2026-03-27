@@ -18,7 +18,7 @@ import logging
 import types
 
 from indexers import split_axis,floatToStr,shift_indices,shift_indices_njit
-from interpolators import face2cell,face2node,face2r,cell2node,cell2face,cell2r,cell2r,node2face,node2cell,node2r,face2cell_njit,face2node_njit,face2r_njit,cell2node_njit,cell2face_njit,cell2r_njit,node2face_njit,node2cell_njit,node2r_njit,curl_face2node,curl_face2node_njit,curl_node2face,curl_node2face_njit
+from interpolators import face2cell,face2node,face2r,cell2node,cell2face,cell2r,cell2r,node2face,node2cell,node2r,face2cell_njit,face2node_njit,face2r_njit,cell2node_njit,cell2face_njit,cell2r_njit,node2face_njit,node2cell_njit,node2r_njit,curl_face2node,curl_face2node_njit,curl_node2face,curl_node2face_njit,get_operator_curl_face2node,get_operator_curl_node2face
 from populations import Pop,compute_alpha,moveParticles,Lorentz,compute_rotated_current,compute_mass_matrices,accumulators,calcNodeData,Pop_njit,compute_alpha_njit,moveParticles_njit,Lorentz_njit,compute_rotated_current_njit,compute_mass_matrices_njit
 from fields import Fields,upwind_fields
 from output import save_data
@@ -402,40 +402,83 @@ def build_A(mass_matrices):
       A[dims.Ncells_total:,dims.Ncells_total:] += dims.dt*dims.theta*mass_matrices[0,0]/const.epsilon_0
    else:
       A = np.zeros((6*dims.Ncells_total,6*dims.Ncells_total))
+      # B-component of Faraday's law
+      A[:3*dims.Ncells_total,:3*dims.Ncells_total] = np.identity(3*dims.Ncells_total)
+      # E-component of Faraday's law
+      A[:3*dims.Ncells_total,3*dims.Ncells_total:] = get_operator_curl_node2face(dims)*dims.dt*dims.theta
+
+      # B-component of Ampère's Law
+      A[3*dims.Ncells_total:,:3*dims.Ncells_total] = get_operator_curl_face2node(dims)*dims.dt*dims.theta*const.c**2
+
+      # E-component of Ampère's Law
+      A[3*dims.Ncells_total:,3*dims.Ncells_total:] = np.identity(3*dims.Ncells_total)
+
+      mass = mass_matrices.transpose((2,1,3,0)).flatten().reshape(3*dims.Ncells_total,3*dims.Ncells_total)
+      
+      A[3*dims.Ncells_total:,3*dims.Ncells_total:] += dims.dt*dims.theta*mass/const.epsilon_0
    return A
 
-def build_b(faceB,nodeE,nodeJ_hat,mass_matrices):
-   # Construct constant vector b of Ax = b equation representing Maxwell's equations
-   Bx,By,Bz = split_axis(faceB, 3)
-   Ex,Ey,Ez = split_axis(nodeE, 3)
-   Jx,Jy,Jz = split_axis(nodeJ_hat, 3)
-
-   Bx = Bx.flatten()
-   By = By.flatten()
-   Bz = Bz.flatten()
-   Ex = Ex.flatten()
-   Ey = Ey.flatten()
-   Ez = Ez.flatten()
-   Jx = Jx.flatten()
-   Jy = Jy.flatten()
-   Jz = Jz.flatten()
-
-   Jx += (1 - dims.theta)*mass_matrices[0,0]@Ex
-   
+def build_b(faceB, nodeE, nodeJ_hat, mass_matrices):
+   # Construct constant vector b of Ax = b equation representing Maxwell's equations      
    if dims.oneV:
+      Ex = nodeE[:,:,:,0].flatten()
+
+      Jx = nodeJ_hat[:,:,:,0].flatten()
+      Jx += (1 - dims.theta)*mass_matrices[0,0]@Ex
+      
       b = np.zeros(2*dims.Ncells_total)
-      # Constant-term of Faraday's Law
-      b[:dims.Ncells_total] += Bx
+      # Constant term of Faraday's Law
+      b[:dims.Ncells_total] += faceB[:,:,:,0].flat
 
       # Constant term of Ampère's Law
       b[dims.Ncells_total:] += Ex-dims.dt*Jx/const.epsilon_0
    else:
+      # Jx = np.zeros(Jx.shape)
+      # Jy = np.zeros(Jy.shape)
+      # Jz = np.zeros(Jz.shape)
+
+      # Jx += (1 - dims.theta)*mass_matrices[0,0]@E_split[0].flat
+      # Jx += (1 - dims.theta)*mass_matrices[0,1]@E_split[1].flat
+      # Jx += (1 - dims.theta)*mass_matrices[0,2]@E_split[2].flat
+      
+      # Jy += (1 - dims.theta)*mass_matrices[1,0]@E_split[0].flat
+      # Jy += (1 - dims.theta)*mass_matrices[1,1]@E_split[1].flat
+      # Jy += (1 - dims.theta)*mass_matrices[1,2]@E_split[2].flat
+
+      # Jz += (1 - dims.theta)*mass_matrices[2,0]@E_split[0].flat
+      # Jz += (1 - dims.theta)*mass_matrices[2,1]@E_split[1].flat
+      # Jz += (1 - dims.theta)*mass_matrices[2,2]@E_split[2].flat
+      
+      E_split = split_axis(nodeE, axis = 3)
+      
+      mass = (1 - dims.theta)*mass_matrices.transpose((1,0,2,3))
+
+      J_mod = np.empty((3,3,dims.Ncells_total), dtype = np.float64)
+      
+      for ii in range(3):
+         J_mod[ii] = np.matvec(mass[ii], E_split[ii].flat)
+
+      J_mod = np.sum(J_mod, axis = 0)
+      
       b = np.zeros(6*dims.Ncells_total)
+
+      J_star = nodeJ_hat.copy().flatten()
+      J_star += J_mod.transpose().flatten()
+      
+      # Constant term of Faraday's Law
+      b[:3*dims.Ncells_total] += faceB.flat
+      b[:3*dims.Ncells_total] -= (curl_node2face(nodeE, dims)*dims.dt*(1-dims.theta)).flat
+      
+      # Constant term of Ampère's Law
+      b[3*dims.Ncells_total:] += nodeE.flat
+      b[3*dims.Ncells_total:] -= dims.dt*J_star/const.epsilon_0
+      b[3*dims.Ncells_total:] += (curl_face2node(faceB, dims)*const.c**2*dims.dt*(1-dims.theta)).flat
    
    return b
             
 def test_interpolators(function = None):
    # Test interpolation methods
+   print("Testing interpolators")
    Np = 100
    
    r = rng.uniform((dims.x_min,dims.y_min,dims.z_min), (dims.x_max,dims.y_max,dims.z_max), (Np,3))
@@ -550,19 +593,32 @@ def test_interpolators(function = None):
       if func.startswith("curl"):
          if func == "curl_face2node":
             # face = np.array(range(dims.Ncells_total*3), dtype = float).reshape(dims.dim_vector)
-            # face = rng.uniform(-1, 1, dims.dim_vector)
-            face = np.zeros(dims.dim_vector)
-            face[1,1,1,0] = 1
+            face = rng.uniform(-1, 1, dims.dim_vector)
+            # face = np.zeros(dims.dim_vector)
+            # face[1,1,1,0] = 1
             curl_f2n = curl_face2node(face, dims)
             curl_f2n_njit = curl_face2node_njit(face, dims)
             compare("curl_face2node:   ", curl_f2n, curl_f2n_njit)
-            breakpoint()
          elif func == "curl_node2face":
             # node = np.array(range(dims.Ncells_total*3), dtype = float).reshape(dims.dim_vector)
             node = rng.uniform(-1, 1, dims.dim_vector)
             curl_n2f = curl_node2face(node, dims)
             curl_n2f_njit = curl_node2face_njit(node, dims)
             compare("curl_node2face:   ", curl_n2f, curl_n2f_njit)
+         elif func == "curl_face2node_operator":
+            face = rng.uniform(-1, 1, dims.dim_vector)
+            curl_f2n = curl_face2node(face, dims)
+            operator = get_operator_curl_face2node(dims)
+            curl_f2n_op = (operator@face.flat).reshape(dims.dim_vector)
+            compare("curl_face2node_op:", curl_f2n, curl_f2n_op)
+         elif func == "curl_node2face_operator":
+            node = rng.uniform(-1, 1, dims.dim_vector)
+            # node = np.zeros(dims.dim_vector)
+            # node[0,0,1,0] = 1
+            curl_n2f = curl_node2face(node, dims)
+            operator = get_operator_curl_node2face(dims)
+            curl_n2f_op = (operator@node.flat).reshape(dims.dim_vector)
+            compare("curl_node2face_op:", curl_n2f, curl_n2f_op)
             
    print("")
    
@@ -716,7 +772,10 @@ def test_interpolators(function = None):
    exit()
       
 def compare(name, first, second):
-   test = all((np.abs(first - second)/max(np.max(np.abs(first)),np.max(np.abs(second)))).flat < 1e-15)
+   if all(first.flat == 0) and all(second.flat == 0):
+      test = True
+   else:
+      test = all((np.abs(first - second)/max(np.max(np.abs(first)),np.max(np.abs(second)))).flat < 1e-15)
 
    print(name + str(test))
    
@@ -846,7 +905,8 @@ period = (z_periodic, y_periodic, x_periodic, True)
 
 dims = Dims(lims, dt, theta, phi, sizes, period, not config.getboolean("main", "use_nonlinear_r_interpolation", fallback = False), oneV)
 
-test_interpolators(args.test)
+if args.test is not None:
+   test_interpolators(args.test)
 
 timers = my_timers()
 
@@ -894,7 +954,7 @@ if __name__ == '__main__':
       config.getfloat("electric_field", "Ez")
    )
 
-   fields = Fields(pops, B_types, B_init, E_types, E_init, dims)
+   fields = Fields(pops, B_types, B_init, E_types, E_init, rng, dims)
 
    cap_dt(pops)
 
@@ -917,7 +977,6 @@ if __name__ == '__main__':
    print("")
    print("Starting iterations")
    for jj in range(1, args.steps + 1):
-      breakpoint()
       logger.newline()
       logger.info("Starting time step " + str(jj))
       if jj%100 == 0:
@@ -965,16 +1024,16 @@ if __name__ == '__main__':
 
       logger.info("Solving Maxwell's equations")
 
-      timers.tic("build A")
-
-      A = build_A(mass_matrices)
-
-      timers.toc("build A")
       timers.tic("build b")
       
       b = build_b(fields.faceB, fields.nodeE, nodeJ_hat, mass_matrices)
-
+      
       timers.toc("build b")
+      timers.tic("build A")
+      
+      A = build_A(mass_matrices)
+      
+      timers.toc("build A")
       timers.tic("gmres")
       
       info = 1
@@ -1006,7 +1065,7 @@ if __name__ == '__main__':
       elif info > 0:
          sys.stderr.write("Did not convergence in timestep " + str(jj) + "\n")
          sys.exit(1)
-
+      
       timers.toc("gmres")
 
       # cellJ = np.zeros(dims.dim_vector, dtype = np.float64)

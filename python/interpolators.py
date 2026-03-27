@@ -3,10 +3,10 @@ import math
 import numpy as np
 import scipy.constants as const
 from numba import njit
-from numba import int64,float64
-# from numpy import int64,float64
+# from numba import int64,float64
+from numpy import int64,float64
 
-from indexers import arr_shift,arr_diff,split_axis,arr_shift_njit,arr_diff_njit,CIC_weights_node,CIC_weights_cell,get_index,get_index_njit
+from indexers import arr_shift,arr_diff,split_axis,arr_shift_njit,arr_diff_njit,CIC_weights_node,CIC_weights_cell,get_index,get_index_njit,numba_ravel_multi_index
 
 def face2cell(face_data, dims):
    # Interpolates data from cell faces to centre
@@ -776,7 +776,7 @@ def curl_face2node(face_data, dims):
    return node_curl
 
 @njit(cache = True)#, fastmath = True)
-def curl_face2node_njit(face_data, dims):
+def curl_face2node_njit_alt(face_data, dims):
    # Compute the curl of face data at nodes
    # First computes edge curl then interpolates to node
    dim_vector = (dims.dim_vector[0],dims.dim_vector[1],
@@ -815,7 +815,7 @@ def curl_face2node_njit(face_data, dims):
    return node_curl
 
 @njit(cache = True)#, fastmath = True)
-def curl_face2node_njit_alt(face_data, dims):
+def curl_face2node_njit(face_data, dims):
    # Compute the curl of face data at nodes
    # First computes edge curl then interpolates to node
    dim_vector = (dims.dim_vector[0],dims.dim_vector[1],
@@ -959,3 +959,106 @@ def curl_node2face_njit(node_data, dims):
    face_curl[:,:,:,2] -= ymean_y_diff_x
    
    return face_curl
+
+# @ftools.lru_cache(maxsize = 128)
+@njit(cache = True)#, fastmath = True)
+def get_operator_curl_face2node(dims):
+   # Returns the 3D curl operator for node2face data in matrix form
+   operator = np.zeros((3*dims.Ncells_total,3*dims.Ncells_total), dtype = float64)
+   shift = np.array([[-1,-1,0], [-1,0,-1], [-1,0,0], [0,-1,-1],
+                     [0,-1,0], [0,0,-1], [0,0,0]], dtype = int64)
+   
+   for kk in range(dims.z_size):
+      for jj in range(dims.y_size):
+         for ii in range(dims.x_size):
+            base_node = np.array((kk,jj,ii), dtype = int64)
+            shift_indices = get_index_njit(base_node, shift, dims)
+            cell_ids = 3*numba_ravel_multi_index(
+               shift_indices, (dims.z_size,dims.y_size,dims.x_size))
+
+            row = cell_ids[-1]
+
+            operator[row, cell_ids[1] + 1] += 1/dims.dz
+            operator[row, cell_ids[5] + 1] -= 1/dims.dz
+            operator[row, cell_ids[5] + 2] += 1/dims.dy
+            operator[row, cell_ids[3] + 2] -= 1/dims.dy
+            operator[row, cell_ids[2] + 1] += 1/dims.dz
+            operator[row, cell_ids[6] + 1] -= 1/dims.dz
+            operator[row, cell_ids[6] + 2] += 1/dims.dy
+            operator[row, cell_ids[4] + 2] -= 1/dims.dy
+
+            operator[row + 1, cell_ids[3] + 2] += 1/dims.dx
+            operator[row + 1, cell_ids[4] + 2] -= 1/dims.dx
+            operator[row + 1, cell_ids[4] + 0] += 1/dims.dz
+            operator[row + 1, cell_ids[0] + 0] -= 1/dims.dz
+            operator[row + 1, cell_ids[5] + 2] += 1/dims.dx
+            operator[row + 1, cell_ids[6] + 2] -= 1/dims.dx
+            operator[row + 1, cell_ids[6] + 0] += 1/dims.dz
+            operator[row + 1, cell_ids[2] + 0] -= 1/dims.dz
+
+            operator[row + 2, cell_ids[0] + 0] += 1/dims.dy
+            operator[row + 2, cell_ids[2] + 0] -= 1/dims.dy
+            operator[row + 2, cell_ids[2] + 1] += 1/dims.dx
+            operator[row + 2, cell_ids[1] + 1] -= 1/dims.dx
+            operator[row + 2, cell_ids[4] + 0] += 1/dims.dy
+            operator[row + 2, cell_ids[6] + 0] -= 1/dims.dy
+            operator[row + 2, cell_ids[6] + 1] += 1/dims.dx
+            operator[row + 2, cell_ids[5] + 1] -= 1/dims.dx
+
+   operator *= 0.5
+
+   return operator
+
+# @ftools.lru_cache(maxsize = 128)
+# @njit(cache = True)#, fastmath = True)
+def get_operator_curl_node2face(dims):
+   # Returns the 3D curl operator for node2face data in matrix form
+   operator = np.zeros((3*dims.Ncells_total,3*dims.Ncells_total), dtype = float64)
+   shift = np.array([[0,0,0], [0,0,1], [0,1,0], [0,1,1],
+                     [1,0,0], [1,0,1], [1,1,0]], dtype = int64)
+   
+   for kk in range(dims.z_size):
+      for jj in range(dims.y_size):
+         for ii in range(dims.x_size):
+            base_node = np.array((kk,jj,ii), dtype = int64)
+            shift_indices = get_index_njit(base_node, shift, dims)
+            cell_ids = 3*numba_ravel_multi_index(
+               shift_indices, (dims.z_size,dims.y_size,dims.x_size))
+
+            row = cell_ids[0]
+
+            # Note: Each is divided by dx,dy or dz as the line integral
+            # first multiplies by dx, dy or dz
+            # (whichever direction we are following)
+            # then we divide by the area of the surface
+            # which cancels this out and leaves the other dimension
+            operator[row, cell_ids[0] + 1] += 1/dims.dz
+            operator[row, cell_ids[2] + 1] += 1/dims.dz
+            operator[row, cell_ids[2] + 2] += 1/dims.dy
+            operator[row, cell_ids[6] + 2] += 1/dims.dy
+            operator[row, cell_ids[6] + 1] -= 1/dims.dz
+            operator[row, cell_ids[4] + 1] -= 1/dims.dz
+            operator[row, cell_ids[4] + 2] -= 1/dims.dy
+            operator[row, cell_ids[0] + 2] -= 1/dims.dy
+            
+            operator[row + 1, cell_ids[0] + 2] += 1/dims.dx
+            operator[row + 1, cell_ids[4] + 2] += 1/dims.dx
+            operator[row + 1, cell_ids[4] + 0] += 1/dims.dz
+            operator[row + 1, cell_ids[5] + 0] += 1/dims.dz
+            operator[row + 1, cell_ids[5] + 2] -= 1/dims.dx
+            operator[row + 1, cell_ids[1] + 2] -= 1/dims.dx
+            operator[row + 1, cell_ids[1] + 0] -= 1/dims.dz
+            operator[row + 1, cell_ids[0] + 0] -= 1/dims.dz
+            
+            operator[row + 2, cell_ids[0] + 0] += 1/dims.dy
+            operator[row + 2, cell_ids[1] + 0] += 1/dims.dy
+            operator[row + 2, cell_ids[1] + 1] += 1/dims.dx
+            operator[row + 2, cell_ids[3] + 1] += 1/dims.dx
+            operator[row + 2, cell_ids[3] + 0] -= 1/dims.dy
+            operator[row + 2, cell_ids[2] + 0] -= 1/dims.dy
+            operator[row + 2, cell_ids[2] + 1] -= 1/dims.dx
+            operator[row + 2, cell_ids[0] + 1] -= 1/dims.dx
+
+   operator *= 0.5
+
+   return operator

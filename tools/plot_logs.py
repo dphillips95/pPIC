@@ -126,7 +126,7 @@ def plotFigure(t_data, var_data, var_label, unit = None, rescale_x = True, resca
    else:
       yRange = np.array((np.min(var_data).item(),np.max(var_data).item()))
    
-   if any(np.isnan(yRange)):
+   if any(np.isnan(yRange)) or all(yRange == 0):
       yRange[0] = -0.05
       yRange[1] = 0.05
    elif 1 - yRange[0]/yRange[1] < 1e-15:
@@ -156,7 +156,7 @@ def plotFigure(t_data, var_data, var_label, unit = None, rescale_x = True, resca
       y_pts /= 1e3**y_log
    else:
       y_log = 0
-
+   
    _,xLocators = get_MultLocators(*xRange)
    if log is True:
       try:
@@ -300,7 +300,7 @@ fig_list = [
    "total_energy"
 ]
 
-fig_list = ["energy_B", "energy_E", "KE", "total_energy"]
+# fig_list = ["total_energy"]
 
 var_list = logs.keys()
 pop_list = (x[:-13] for x in var_list if x.endswith("_avgCellU_mag"))
@@ -344,37 +344,44 @@ for fig_name in fig_list:
    elif fig_name == "maxCellJ_mag":
       figs.append(plotFigure(logs.t, logs.maxCellJ_mag, "max(|cellJ|)", r"A/m$^3$"))
    elif fig_name == "total_energy":
-      figs.append(plotFigure(logs.t, logs.total_energy, "Total Energy", "J"))
-   else:
-      for pop in pop_list:
-         if fig_name == "Np":
-            figs.append(plotFigure(logs.t, logs[pop + "_Np"], pop + " macroparticles"))
-         elif fig_name == "parts":
-            figs.append(plotFigure(logs.t, logs[pop + "_parts"], pop + " particles"))
-         elif fig_name == "avgCellUx":
-            figs.append(plotFigure(logs.t, logs[pop + "_avgCellUx"], pop + " avg(Ux)", "m/s"))
-         elif fig_name == "avgCellUy":
-            figs.append(plotFigure(logs.t, logs[pop + "_avgCellUy"], pop + " avg(Uy)", "m/s"))
-         elif fig_name == "avgCellUz":
-            figs.append(plotFigure(logs.t, logs[pop + "_avgCellUz"], pop + " avg(Uz)", "m/s"))
-         elif fig_name == "avgCellU_mag":
-            figs.append(plotFigure(logs.t, logs[pop + "_avgCellU_mag"], pop + " avg(|U|)", "m/s"))
-         elif fig_name == "maxCellU_mag":
-            figs.append(plotFigure(logs.t, logs[pop + "_maxCellU_mag"], pop + " max(|U|)", "m/s"))
-         elif fig_name == "avgCellJix":
-            figs.append(plotFigure(logs.t, logs[pop + "_avgCellJix"], pop + " avg(cellJx)", "V/m"))
-         elif fig_name == "avgCellJiy":
-            figs.append(plotFigure(logs.t, logs[pop + "_avgCellJiy"], pop + " avg(cellJy)", "V/m"))
-         elif fig_name == "avgCellJiz":
-            figs.append(plotFigure(logs.t, logs[pop + "_avgCellJiz"], pop + " avg(cellJz)", "V/m"))
-         elif fig_name == "avgCellJi_mag":
-            figs.append(plotFigure(logs.t, logs[pop + "_avgCellJi_mag"], pop + " avg(|cellJ|)", "V/m"))
-         elif fig_name == "maxCellJi_mag":
-            figs.append(plotFigure(logs.t, logs[pop + "_maxCellJi_mag"], pop + " max(|cellJ|)", "V/m"))
-         elif fig_name == "KE":
-            figs.append(plotFigure(logs.t, logs[pop + "_KE"], pop + " Kinetic Energy", "J", log = True))
+      figs.append(plotFigure(logs.t, logs.total_energy, "Total Energy", "J", log = True))
 
-with PdfPages("logs.pdf", keep_empty = False) as pdf:
+with PdfPages("field_logs.pdf", keep_empty = False) as pdf:
+   for fig in figs:
+      pdf.savefig(fig, dpi = figDpi, transparent = False, bbox_inches = 'tight')
+      plt.close(fig)
+
+figs = []      
+for pop in pop_list:
+   for fig_name in fig_list:
+      if fig_name == "Np":
+         figs.append(plotFigure(logs.t, logs[pop + "_Np"], pop + " macroparticles"))
+      elif fig_name == "parts":
+         figs.append(plotFigure(logs.t, logs[pop + "_parts"], pop + " particles"))
+      elif fig_name == "avgCellUx":
+         figs.append(plotFigure(logs.t, logs[pop + "_avgCellUx"], pop + " avg(Ux)", "m/s"))
+      elif fig_name == "avgCellUy":
+         figs.append(plotFigure(logs.t, logs[pop + "_avgCellUy"], pop + " avg(Uy)", "m/s"))
+      elif fig_name == "avgCellUz":
+         figs.append(plotFigure(logs.t, logs[pop + "_avgCellUz"], pop + " avg(Uz)", "m/s"))
+      elif fig_name == "avgCellU_mag":
+         figs.append(plotFigure(logs.t, logs[pop + "_avgCellU_mag"], pop + " avg(|U|)", "m/s"))
+      elif fig_name == "maxCellU_mag":
+         figs.append(plotFigure(logs.t, logs[pop + "_maxCellU_mag"], pop + " max(|U|)", "m/s"))
+      elif fig_name == "avgCellJix":
+         figs.append(plotFigure(logs.t, logs[pop + "_avgCellJix"], pop + " avg(cellJx)", "V/m"))
+      elif fig_name == "avgCellJiy":
+         figs.append(plotFigure(logs.t, logs[pop + "_avgCellJiy"], pop + " avg(cellJy)", "V/m"))
+      elif fig_name == "avgCellJiz":
+         figs.append(plotFigure(logs.t, logs[pop + "_avgCellJiz"], pop + " avg(cellJz)", "V/m"))
+      elif fig_name == "avgCellJi_mag":
+         figs.append(plotFigure(logs.t, logs[pop + "_avgCellJi_mag"], pop + " avg(|cellJ|)", "V/m"))
+      elif fig_name == "maxCellJi_mag":
+         figs.append(plotFigure(logs.t, logs[pop + "_maxCellJi_mag"], pop + " max(|cellJ|)", "V/m"))
+      elif fig_name == "KE":
+         figs.append(plotFigure(logs.t, logs[pop + "_KE"], pop + " Kinetic Energy", "J", log = True))
+
+with PdfPages("pop_logs.pdf", keep_empty = False) as pdf:
    for fig in figs:
       pdf.savefig(fig, dpi = figDpi, transparent = False, bbox_inches = 'tight')
       plt.close(fig)

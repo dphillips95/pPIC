@@ -475,6 +475,18 @@ def numba_unravel_index(index, dims):
       wi = index // (dims[1] * dims[2] * dims[3])
       return np.array([wi,zi,yi,xi], dtype = int64)
 
+@njit(cache = True, fastmath = True)
+def numba_ravel_multi_index(indices, dims):
+   # Equivalent of np.ravel_multi_index, compatible with numba
+   ndim = len(dims)
+   out = np.zeros(indices.shape[0], dtype = int64)
+   out += indices[:,0]
+   for ii in range(1,ndim):
+      out *= dims[ii]
+      out += indices[:,ii]
+   
+   return out
+
 def floatToStr(value, decimals = 0, pad = None):
    # Converts float to string with given number of decimals (rounded)
    # decimals must be an integer

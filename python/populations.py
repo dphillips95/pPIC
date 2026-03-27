@@ -167,23 +167,21 @@ def compute_alpha(pop, faceB, dims):
 
    bx,by,bz = split_axis(rB*beta, axis = 1)
 
+   pop.alpha = np.zeros((pop.Np,3,3))
    if dims.oneV is True:
-      pop.alpha = np.zeros((pop.Np,3,3))
-
       pop.alpha[:,0,0] = 1
    else:
       factor = 1/(1 + bx**2 + by**2 + bz**2)
-
-      pop.alpha = np.zeros((pop.Np,3,3))
-      pop.alpha[:,0,0] = 1 + bx**2
-      pop.alpha[:,0,1] = 1 + bz + bx*by
-      pop.alpha[:,0,2] = 1 - by + bx*bz
-      pop.alpha[:,1,0] = 1 - bz + bx*by
-      pop.alpha[:,1,1] = 1 + by**2
-      pop.alpha[:,1,2] = 1 + bx + by*bz
-      pop.alpha[:,2,0] = 1 + by + bx*bz
-      pop.alpha[:,2,1] = 1 - bx + by*bz
-      pop.alpha[:,2,2] = 1 + bz**2
+      
+      pop.alpha[:,0,0] = bx*bx + 1
+      pop.alpha[:,0,1] = bx*by + bz
+      pop.alpha[:,0,2] = bx*bz - by
+      pop.alpha[:,1,0] = bx*by - bz
+      pop.alpha[:,1,1] = by*by + 1
+      pop.alpha[:,1,2] = by*bz + bx
+      pop.alpha[:,2,0] = bx*bz + by
+      pop.alpha[:,2,1] = by*bz - bx
+      pop.alpha[:,2,2] = bz*bz + 1
 
       pop.alpha *= factor.reshape(pop.Np,1,1)
 
@@ -259,9 +257,9 @@ def compute_rotated_current(pop, dims):
    # Current is stored at nodes to match E
    # This is accumulated directly to the nodes
    nodeJ = np.zeros(dims.dim_vector)
-
+   
    (x_ind,y_ind,z_ind),(x_w,y_w,z_w) = CIC_weights_node(pop.r, dims)
-
+   
    alpha_v = np.transpose(np.matvec(pop.alpha, pop.v))
    
    if dims.oneV is True:
@@ -275,7 +273,7 @@ def compute_rotated_current(pop, dims):
       
       # (nodal) 'rotated' current density
       for nn in range(3):
-         v_nn = v[nn].copy()
+         alpha_v_nn = alpha_v[nn].copy()
          
          np.add.at(nodeJ[:,:,:,nn], (z_ind[0],y_ind[0],x_ind[0]), w[0,0,0]*alpha_v_nn)
          np.add.at(nodeJ[:,:,:,nn], (z_ind[0],y_ind[0],x_ind[1]), w[0,0,1]*alpha_v_nn)
@@ -297,9 +295,9 @@ def compute_mass_matrices(pop, dims):
       alpha = pop.alpha[:,0,0].reshape(-1,1,1)
    else:
       M = np.zeros((dims.Ncells_total,dims.Ncells_total,3,3))
-      alpha = np.transpose(pop.alpha, (1,2,0))
+      # alpha = np.transpose(pop.alpha, (1,2,0))
    
-   (x_ind,y_ind,z_ind),(x_w,y_w,z_w) = CIC_weights_node(pop.r, dims)
+   (x_ind,y_ind,z_ind),(x_w,y_w,z_w) = CIC_weights_node(pop.r, dims, False)
    
    if dims.oneV is True:
       # x_w_outer = np.empty((pop.Np,2,2))
@@ -309,7 +307,6 @@ def compute_mass_matrices(pop, dims):
       for xi,x_wi in zip(x_ind,x_w):
          for xj,x_wj in zip(x_ind,x_w):
             np.add.at(M, (xi,xj), x_wi*x_wj*alpha)
-      M = np.transpose(M, (2,3,0,1))
    else:
       # y_w = np.hstack((y_w0[:,np.newaxis],y_w1[:,np.newaxis]))
       # z_w = np.hstack((z_w0[:,np.newaxis],z_w1[:,np.newaxis]))
@@ -332,18 +329,34 @@ def compute_mass_matrices(pop, dims):
       # ind_sub_y = (z_ind0*dims.y_size + y_ind0)*dims.x_size + x_ind0
 
       # w_sub = (x_w0*x_w0*y_w0*y_w0*z_w0*z_w0)[-1,np.newaxis,np.newaxis] * alpha
+      
+      x_w = x_w.reshape(2,-1,1,1)
+      y_w = y_w.reshape(2,-1,1,1)
+      z_w = z_w.reshape(2,-1,1,1)
+      
       for xi,x_wi in zip(x_ind,x_w):
          for xj,x_wj in zip(x_ind,x_w):
             for yi,y_wi in zip(y_ind,y_w):
                for yj,y_wj in zip(y_ind,y_w):
                   for zi,z_wi in zip(z_ind,z_w):
                      for zj,z_wj in zip(z_ind,z_w):
-                        M[:,:,(zi*dims.y_size + yi)*dims.x_size + xi,
-                          (zj*dims.y_size + yj)*dims.x_size + xj] += (x_wi*x_wj*y_wi*y_wj*z_wi*z_wj).reshape(1,1,-1) * alpha
+                        rows = np.ravel_multi_index((zi,yi,xi),
+                                                    (dims.z_size,
+                                                     dims.y_size,
+                                                     dims.x_size))
 
+                        cols = np.ravel_multi_index((zj,yj,xj),
+                                                    (dims.z_size,
+                                                     dims.y_size,
+                                                     dims.x_size))
+                        
+                        np.add.at(M, (rows,cols),
+                                  (x_wi*x_wj*y_wi*y_wj*z_wi*z_wj) * pop.alpha)
+   M = np.transpose(M, (2,3,0,1))
+   
    beta = dims.phi*(pop.q*dims.dt)/pop.m
    M *= beta * pop.q*pop.w/dims.dV
-
+   
    return M
 
 Pop_spec = [
@@ -559,17 +572,18 @@ def compute_alpha_njit(pop, faceB, dims):
       pop.alpha[:,0,0] = 1
    else:
       factor = 1/(1 + bx**2 + by**2 + bz**2)
-
+      
       pop.alpha = np.zeros((pop.Np,3,3))
-      pop.alpha[:,0,0] = 1 + bx**2
-      pop.alpha[:,0,1] = 1 + bz + bx*by
-      pop.alpha[:,0,2] = 1 - by + bx*bz
-      pop.alpha[:,1,0] = 1 - bz + bx*by
-      pop.alpha[:,1,1] = 1 + by**2
-      pop.alpha[:,1,2] = 1 + bx + by*bz
-      pop.alpha[:,2,0] = 1 + by + bx*bz
-      pop.alpha[:,2,1] = 1 - bx + by*bz
-      pop.alpha[:,2,2] = 1 + bz**2
+      
+      pop.alpha[:,0,0] = bx*bx + 1
+      pop.alpha[:,0,1] = bx*by + bz
+      pop.alpha[:,0,2] = bx*bz - by
+      pop.alpha[:,1,0] = bx*by - bz
+      pop.alpha[:,1,1] = by*by + 1
+      pop.alpha[:,1,2] = by*bz + bx
+      pop.alpha[:,2,0] = bx*bz + by
+      pop.alpha[:,2,1] = by*bz - bx
+      pop.alpha[:,2,2] = bz*bz + 1
 
       pop.alpha *= factor.reshape(pop.Np,1,1)
 
@@ -759,13 +773,13 @@ def nodeU_njit(pop, dims):
 #    return nodeJ
 
 @njit(cache = True, fastmath = True)
-def compute_rotated_current_njit(pop, dims):
+def compute_rotated_current_njit(pop_r, pop_v, pop_alpha, q, w, dims):
    # Computes current due to B-rotation
    # Current is stored at nodes to match E
    # This is accumulated directly to the nodes
    nodeJ = np.zeros(dims.dim_vector)
    
-   for r,v,alpha in zip(pop.r,pop.v,pop.alpha):
+   for r,v,alpha in zip(pop_r,pop_v,pop_alpha):
       x_locs = np.floor((r[0] - dims.x_min)/dims.dx).astype(int)
       y_locs = np.floor((r[1] - dims.y_min)/dims.dy).astype(int)
       z_locs = np.floor((r[2] - dims.z_min)/dims.dz).astype(int)
@@ -808,12 +822,12 @@ def compute_rotated_current_njit(pop, dims):
          y_w = np.stack((y_w0,y_w1)).reshape(1,2,1,-1)
          z_w = np.stack((z_w0,z_w1)).reshape(2,1,1,-1)
          w = z_w*y_w*x_w
-
+         
          alpha_v = alpha@v
 
          # (cell-centred) current density
          for nn in range(3):
-            alpha_v_nn = v[nn].copy()
+            alpha_v_nn = alpha_v[nn].copy()
             
             nodeJ[z_ind0,y_ind0,x_ind0,nn] += w[0,0,0]*alpha_v_nn
             nodeJ[z_ind0,y_ind0,x_ind1,nn] += w[0,0,1]*alpha_v_nn
@@ -824,22 +838,22 @@ def compute_rotated_current_njit(pop, dims):
             nodeJ[z_ind1,y_ind1,x_ind0,nn] += w[1,1,0]*alpha_v_nn
             nodeJ[z_ind1,y_ind1,x_ind1,nn] += w[1,1,1]*alpha_v_nn
             
-   nodeJ *= pop.q*pop.w/dims.dV
+   nodeJ *= q*w/dims.dV
 
    return nodeJ
 
 @njit(cache = True, fastmath = True)
-def compute_mass_matrices_njit(pop, dims):
+def compute_mass_matrices_njit(pop_r, pop_alpha, m, q, w, dims):
    # Compute mass matrices
    if dims.oneV:
       M = np.zeros((1,1,dims.Ncells_total,dims.Ncells_total))
    else:
       M = np.zeros((3,3,dims.Ncells_total,dims.Ncells_total))
 
-   for r,alpha in zip(pop.r,pop.alpha):
-      x_locs = np.floor((r[0] - dims.x_min)/dims.dx).astype(int)
-      y_locs = np.floor((r[1] - dims.y_min)/dims.dy).astype(int)
-      z_locs = np.floor((r[2] - dims.z_min)/dims.dz).astype(int)
+   for r,alpha in zip(pop_r,pop_alpha):
+      x_locs = math.floor((r[0] - dims.x_min)/dims.dx)
+      y_locs = math.floor((r[1] - dims.y_min)/dims.dy)
+      z_locs = math.floor((r[2] - dims.z_min)/dims.dz)
 
       x0 = x_locs*dims.dx + dims.x_min
       y0 = y_locs*dims.dy + dims.y_min
@@ -892,7 +906,7 @@ def compute_mass_matrices_njit(pop, dims):
                                  M[ii,jj,(zi*dims.y_size + yi)*dims.x_size + xi,
                                    (zj*dims.y_size + yj)*dims.x_size + xj] += x_wi*x_wj*y_wi*y_wj*z_wi*z_wj * alpha[ii,jj]
 
-   beta = dims.phi*(pop.q*dims.dt)/pop.m
-   M *= beta * pop.q*pop.w/dims.dV
+   beta = dims.phi*(q*dims.dt)/m
+   M *= beta * q*w/dims.dV
 
    return M
