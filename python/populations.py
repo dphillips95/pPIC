@@ -8,7 +8,7 @@ from numba import njit,int64,float64,guvectorize
 from numba.experimental import jitclass
 
 from interpolators import face2r,cell2r,node2r,face2r_njit,cell2r_njit,node2r_njit
-from tools import split_axis,numba_unravel_index,CIC_weights_node,CIC_weights_cell
+from indexers import split_axis,numba_unravel_index,CIC_weights_node,CIC_weights_cell
 
 class Pop:
    # Contents:

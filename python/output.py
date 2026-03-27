@@ -3,7 +3,7 @@ import numpy as np
 import h5py
 import scipy.constants as const
 
-from tools import split_axis
+from indexers import split_axis
 
 def save_data(path, fields, pops, dims):
    # Save all data to hdf5 files

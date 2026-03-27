@@ -4,7 +4,7 @@ import numpy as np
 from numba import njit
 from numba import int64,float64
 
-from tools import arr_shift,split_axis,arr_shift_njit,CIC_weights_node,CIC_weights_cell
+from indexers import arr_shift,split_axis,arr_shift_njit,CIC_weights_node,CIC_weights_cell
 
 def face2cell(face_data, dims):
    # Interpolates data from cell faces to centre
