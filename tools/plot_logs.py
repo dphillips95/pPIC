@@ -9,6 +9,12 @@ import matplotlib.pyplot as plt
 from matplotlib import ticker
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_pdf import PdfPages
+import argparse
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--vars", type = str, nargs = '+',
+                    help = "List of variables to plot, if unset plots all")
+args = parser.parse_args()
 
 def saveFigure(fig, filePath, dpi, attempts = 100, delay = 1, tight = False):
    # Tries to save figure; on failure, retries with delay
@@ -265,42 +271,43 @@ figureSize = (figResolutionX/figDpi,figResolutionY/figDpi)
 
 logs = xr.open_dataset("logs.h5")
 
-fig_list = [
-   "avgFaceBx",
-   "avgFaceBy",
-   "avgFaceBz",
-   "avgFaceB_mag",
-   "maxFaceB_mag",
-   "energy_B",
-   "avgNodeEx",
-   "avgNodeEy",
-   "avgNodeEz",
-   "avgNodeE_mag",
-   "maxNodeE_mag",
-   "energy_E",
-   "avgCellRhoQ",
-   "avgCellJx",
-   "avgCellJy",
-   "avgCellJz",
-   "avgCellJ_mag",
-   "maxCellJ_mag",
-   "Np",
-   "parts",
-   "avgCellUx",
-   "avgCellUy",
-   "avgCellUz",
-   "avgCellU_mag",
-   "maxCellU_mag",
-   "avgCellJix",
-   "avgCellJiy",
-   "avgCellJiz",
-   "avgCellJi_mag",
-   "maxCellJi_mag",
-   "KE",
-   "total_energy"
-]
-
-# fig_list = ["total_energy"]
+if args.vars is None:
+   fig_list = [
+      "avgFaceBx",
+      "avgFaceBy",
+      "avgFaceBz",
+      "avgFaceB_mag",
+      "maxFaceB_mag",
+      "energy_B",
+      "avgNodeEx",
+      "avgNodeEy",
+      "avgNodeEz",
+      "avgNodeE_mag",
+      "maxNodeE_mag",
+      "energy_E",
+      "avgCellRhoQ",
+      "avgCellJx",
+      "avgCellJy",
+      "avgCellJz",
+      "avgCellJ_mag",
+      "maxCellJ_mag",
+      "Np",
+      "parts",
+      "avgCellUx",
+      "avgCellUy",
+      "avgCellUz",
+      "avgCellU_mag",
+      "maxCellU_mag",
+      "avgCellJix",
+      "avgCellJiy",
+      "avgCellJiz",
+      "avgCellJi_mag",
+      "maxCellJi_mag",
+      "KE",
+      "total_energy"
+   ]
+else:
+   fig_list = args.vars
 
 var_list = logs.keys()
 pop_list = (x[:-13] for x in var_list if x.endswith("_avgCellU_mag"))

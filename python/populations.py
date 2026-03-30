@@ -48,7 +48,10 @@ class Pop:
       self.v = np.empty((0,3), dtype = np.float64)
       
       if Np > 0:
-         vth = math.sqrt(const.k*T/self.m)
+         if dims.oneV:
+            vth = math.sqrt(const.k*T/self.m)
+         else:
+            vth = math.sqrt(3*const.k*T/self.m)
          uniform_injector(self, Np, vth, v, rng, dims)
       
       accumulators(self, dims)
@@ -288,7 +291,7 @@ def compute_rotated_current(pop, dims):
 
    return nodeJ
 
-def compute_mass_matrices(pop, dims):
+def compute_mass_matrices_alt(pop, dims):
    # Compute mass matrices
    if dims.oneV:
       M = np.zeros((dims.Ncells_total,dims.Ncells_total,1,1))
@@ -351,6 +354,70 @@ def compute_mass_matrices(pop, dims):
                                                      dims.x_size))
                         
                         np.add.at(M, (rows,cols),
+                                  (x_wi*x_wj*y_wi*y_wj*z_wi*z_wj) * pop.alpha)
+   M = np.transpose(M, (2,3,0,1))
+   
+   beta = dims.phi*(pop.q*dims.dt)/pop.m
+   M *= beta * pop.q*pop.w/dims.dV
+   
+   return M
+
+def compute_mass_matrices(pop, dims):
+   # Compute mass matrices
+   if dims.oneV:
+      M = np.zeros((dims.Ncells_total,dims.Ncells_total,1,1))
+      alpha = pop.alpha[:,0,0].reshape(-1,1,1)
+   else:
+      M = np.zeros((dims.Ncells_total,dims.Ncells_total,3,3))
+      # alpha = np.transpose(pop.alpha, (1,2,0))
+   
+   (x_ind,y_ind,z_ind),(x_w,y_w,z_w) = CIC_weights_node(pop.r, dims, False)
+   
+   if dims.oneV is True:
+      # x_w_outer = np.empty((pop.Np,2,2))
+      # gu_outer(x_w, x_w, x_w_outer)
+      x_w = x_w.reshape(2,-1,1,1)
+      
+      for xi,x_wi in zip(x_ind,x_w):
+         for xj,x_wj in zip(x_ind,x_w):
+            np.add.at(M, (xi,xj), x_wi*x_wj*alpha)
+   else:
+      # y_w = np.hstack((y_w0[:,np.newaxis],y_w1[:,np.newaxis]))
+      # z_w = np.hstack((z_w0[:,np.newaxis],z_w1[:,np.newaxis]))
+
+      # x_w_outer = np.empty((pop.Np,2,2))
+      # y_w_outer = x_w_outer.copy()
+      # z_w_outer = x_w_outer.copy()
+      # gu_outer(x_w, x_w, x_w_outer)
+      # gu_outer(y_w, y_w, y_w_outer)
+      # gu_outer(z_w, z_w, z_w_outer)
+
+      # x_w = np.stack((x_w0,x_w1)).reshape(1,1,2,-1)
+      # y_w = np.stack((y_w0,y_w1)).reshape(1,2,1,-1)
+      # z_w = np.stack((z_w0,z_w1)).reshape(2,1,1,-1)
+      # w = z_w*y_w*x_w
+
+      # ww = w[np.newaxis,np.newaxis,np.newaxis,...]*w[:,:,:,np.newaxis,np.newaxis,np.newaxis,...]
+
+      # ind_sub_x = (z_ind0*dims.y_size + y_ind0)*dims.x_size + x_ind0
+      # ind_sub_y = (z_ind0*dims.y_size + y_ind0)*dims.x_size + x_ind0
+
+      # w_sub = (x_w0*x_w0*y_w0*y_w0*z_w0*z_w0)[-1,np.newaxis,np.newaxis] * alpha
+      
+      x_w = x_w.reshape(2,-1,1,1)
+      y_w = y_w.reshape(2,-1,1,1)
+      z_w = z_w.reshape(2,-1,1,1)
+
+      y_ind *= dims.x_size
+      z_ind *= dims.x_size*dims.y_size
+      
+      for xi,x_wi in zip(x_ind,x_w):
+         for xj,x_wj in zip(x_ind,x_w):
+            for yi,y_wi in zip(y_ind,y_w):
+               for yj,y_wj in zip(y_ind,y_w):
+                  for zi,z_wi in zip(z_ind,z_w):
+                     for zj,z_wj in zip(z_ind,z_w):
+                        np.add.at(M, (xi + yi + xi,zj + yj + xj),
                                   (x_wi*x_wj*y_wi*y_wj*z_wi*z_wj) * pop.alpha)
    M = np.transpose(M, (2,3,0,1))
    
@@ -882,6 +949,11 @@ def compute_mass_matrices_njit(pop_r, pop_alpha, m, q, w, dims):
       if dims.period[0]:
          z_ind1 = np.mod(z_ind1, dims.z_size)
 
+      y_ind0 *= dims.x_size
+      y_ind1 *= dims.x_size
+      z_ind0 *= dims.y_size*dims.x_size
+      z_ind1 *= dims.y_size*dims.x_size
+         
       x_ind = (x_ind0, x_ind1)
       y_ind = (y_ind0, y_ind1)
       z_ind = (z_ind0, z_ind1)
@@ -889,7 +961,7 @@ def compute_mass_matrices_njit(pop_r, pop_alpha, m, q, w, dims):
       x_w = (x_w0,x_w1)
       y_w = (y_w0,y_w1)
       z_w = (z_w0,z_w1)
-
+      
       if dims.oneV is True:
          for xi,x_wi in zip(x_ind,x_w):
             for xj,x_wj in zip(x_ind,x_w):
@@ -903,8 +975,7 @@ def compute_mass_matrices_njit(pop_r, pop_alpha, m, q, w, dims):
                         for zj,z_wj in zip(z_ind,z_w):
                            for ii in range(3):
                               for jj in range(3):
-                                 M[ii,jj,(zi*dims.y_size + yi)*dims.x_size + xi,
-                                   (zj*dims.y_size + yj)*dims.x_size + xj] += x_wi*x_wj*y_wi*y_wj*z_wi*z_wj * alpha[ii,jj]
+                                 M[ii,jj,zi+yi+xi,zj+yj+xj] += x_wi*x_wj*y_wi*y_wj*z_wi*z_wj * alpha[ii,jj]
 
    beta = dims.phi*(q*dims.dt)/m
    M *= beta * q*w/dims.dV

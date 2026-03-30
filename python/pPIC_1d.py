@@ -408,7 +408,7 @@ def build_A(mass_matrices):
       A[:3*dims.Ncells_total,3*dims.Ncells_total:] = get_operator_curl_node2face(dims)*dims.dt*dims.theta
 
       # B-component of Ampère's Law
-      A[3*dims.Ncells_total:,:3*dims.Ncells_total] = get_operator_curl_face2node(dims)*dims.dt*dims.theta*const.c**2
+      A[3*dims.Ncells_total:,:3*dims.Ncells_total] = -get_operator_curl_face2node(dims)*dims.dt*dims.theta*const.c**2
 
       # E-component of Ampère's Law
       A[3*dims.Ncells_total:,3*dims.Ncells_total:] = np.identity(3*dims.Ncells_total)
@@ -979,7 +979,7 @@ if __name__ == '__main__':
    for jj in range(1, args.steps + 1):
       logger.newline()
       logger.info("Starting time step " + str(jj))
-      if jj%100 == 0:
+      if jj%25 == 0:
          print("Starting time step " + str(jj))
 
       timers.tic("locs")
@@ -1017,7 +1017,8 @@ if __name__ == '__main__':
 
       for pop in pops.values():
          if pop.static is False:
-            mass_matrices += compute_mass_matrices(pop, dims)
+            mass_matrices += compute_mass_matrices_njit(
+               pop.r, pop.alpha, pop.m, pop.q, pop.w, dims)
 
       timers.toc("mass matrices")
       timers.tic("maxwell")
@@ -1044,9 +1045,9 @@ if __name__ == '__main__':
          x0 = np.concatenate((fields.faceB[:,:,:,0].flat,fields.nodeE[:,:,:,0].flat))
       else:
          x0 = np.concatenate((fields.faceB.flat,fields.nodeE.flat))
-
+      
       while info > 0 and rtol < 1e-2 and atol < 1e-2:
-
+         
          xnext,info = gmres(A, b, rtol = rtol, atol = atol, x0 = x0)
          if info > 0:
             logger.info("GMRES tolerance failure on step " + str(jj) + ", reducing tolerance")
@@ -1055,7 +1056,7 @@ if __name__ == '__main__':
                print("GMRES tolerance failure on step " + str(jj) + ", reducing tolerance")
             rtol *= 10
             atol *= 10
-
+      
       if rtol != args.rtol:
          logger.info("Tolerance reduced to " + str(rtol) + ", " + str(math.floor(math.log(rtol/args.rtol, 10))) + " orders of magnitude")
 
