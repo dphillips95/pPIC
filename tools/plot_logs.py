@@ -126,10 +126,10 @@ def plotFigure(t_data, var_data, var_label, unit = None, rescale_x = True, resca
    else:
       yRange = np.array((np.min(var_data).item(),np.max(var_data).item()))
    
-   if any(np.isnan(yRange)) or all(yRange == 0):
+   if any(np.isnan(yRange)) or all(np.abs(yRange) < 1e-17):
       yRange[0] = -0.05
       yRange[1] = 0.05
-   elif 1 - yRange[0]/yRange[1] < 1e-15:
+   elif yRange[1] - yRange[0] < 1e-15*yRange[1]:
       mid = np.mean(yRange)
       if mid == 0:
          diff = 0.05
@@ -318,7 +318,7 @@ for fig_name in fig_list:
    elif fig_name == "maxFaceB_mag":
       figs.append(plotFigure(logs.t, logs.maxFaceB_mag, "max(|faceB|)", "T"))
    elif fig_name == "energy_B":
-      figs.append(plotFigure(logs.t, logs.energy_B, "energy(faceB)", "T", log = True))
+      figs.append(plotFigure(logs.t, logs.energy_B, "energy(faceB)", "J", log = True))
    elif fig_name == "avgNodeEx":
       figs.append(plotFigure(logs.t, logs.avgNodeEx, "avg(nodeEx)", "V/m"))
    elif fig_name == "avgNodeEy":
@@ -334,15 +334,15 @@ for fig_name in fig_list:
    elif fig_name == "avgCellRhoQ":
       figs.append(plotFigure(logs.t, logs.avgCellRhoQ, "avg(cellRhoQ)", r"C/m$^3$"))
    elif fig_name == "avgCellJx":
-      figs.append(plotFigure(logs.t, logs.avgCellJx, "avg(cellJx)", r"A/m$^3$"))
+      figs.append(plotFigure(logs.t, logs.avgCellJx, "avg(cellJx)", r"A/m$^2$"))
    elif fig_name == "avgCellJy":
-      figs.append(plotFigure(logs.t, logs.avgCellJy, "avg(cellJy)", r"A/m$^3$"))
+      figs.append(plotFigure(logs.t, logs.avgCellJy, "avg(cellJy)", r"A/m$^2$"))
    elif fig_name == "avgCellJz":
-      figs.append(plotFigure(logs.t, logs.avgCellJz, "avg(cellJz)", r"A/m$^3$"))
+      figs.append(plotFigure(logs.t, logs.avgCellJz, "avg(cellJz)", r"A/m$^2$"))
    elif fig_name == "avgCellJ_mag":
-      figs.append(plotFigure(logs.t, logs.avgCellJ_mag, "avg(|cellJ|)", r"A/m$^3$"))
+      figs.append(plotFigure(logs.t, logs.avgCellJ_mag, "avg(|cellJ|)", r"A/m$^2$"))
    elif fig_name == "maxCellJ_mag":
-      figs.append(plotFigure(logs.t, logs.maxCellJ_mag, "max(|cellJ|)", r"A/m$^3$"))
+      figs.append(plotFigure(logs.t, logs.maxCellJ_mag, "max(|cellJ|)", r"A/m$^2$"))
    elif fig_name == "total_energy":
       figs.append(plotFigure(logs.t, logs.total_energy, "Total Energy", "J", log = True))
 
@@ -369,15 +369,15 @@ for pop in pop_list:
       elif fig_name == "maxCellU_mag":
          figs.append(plotFigure(logs.t, logs[pop + "_maxCellU_mag"], pop + " max(|U|)", "m/s"))
       elif fig_name == "avgCellJix":
-         figs.append(plotFigure(logs.t, logs[pop + "_avgCellJix"], pop + " avg(cellJx)", "V/m"))
+         figs.append(plotFigure(logs.t, logs[pop + "_avgCellJix"], pop + " avg(cellJx)", r"A/m$^2$"))
       elif fig_name == "avgCellJiy":
-         figs.append(plotFigure(logs.t, logs[pop + "_avgCellJiy"], pop + " avg(cellJy)", "V/m"))
+         figs.append(plotFigure(logs.t, logs[pop + "_avgCellJiy"], pop + " avg(cellJy)", r"A/m$^2$"))
       elif fig_name == "avgCellJiz":
-         figs.append(plotFigure(logs.t, logs[pop + "_avgCellJiz"], pop + " avg(cellJz)", "V/m"))
+         figs.append(plotFigure(logs.t, logs[pop + "_avgCellJiz"], pop + " avg(cellJz)", r"A/m$^2$"))
       elif fig_name == "avgCellJi_mag":
-         figs.append(plotFigure(logs.t, logs[pop + "_avgCellJi_mag"], pop + " avg(|cellJ|)", "V/m"))
+         figs.append(plotFigure(logs.t, logs[pop + "_avgCellJi_mag"], pop + " avg(|cellJ|)", r"A/m$^2$"))
       elif fig_name == "maxCellJi_mag":
-         figs.append(plotFigure(logs.t, logs[pop + "_maxCellJi_mag"], pop + " max(|cellJ|)", "V/m"))
+         figs.append(plotFigure(logs.t, logs[pop + "_maxCellJi_mag"], pop + " max(|cellJ|)", r"A/m$^2$"))
       elif fig_name == "KE":
          figs.append(plotFigure(logs.t, logs[pop + "_KE"], pop + " Kinetic Energy", "J", log = True))
 
