@@ -52,7 +52,7 @@ def configHelp():
    IMPORTANT NOTE: To leave an option blank, omit the equals '=' sign, do NOT delete from config file.
 
 
-   print("[main] options:
+   [main] options:
 
    unsafe (bool): Ignore dt and dx bounds
 
@@ -65,7 +65,7 @@ def configHelp():
    use_nonlinear_r_interpolation (bool): Use distance-weighted interpolation in cell2r and node2r instead of trilinear
 
 
-   print("[simulation] options:
+   [simulation] options:
 
    steps (int): Number of full time steps to run
 
@@ -83,8 +83,7 @@ def configHelp():
 
    Vdt_dx_cap (float): Maximum ratio of time step to dx/maxV, i.e. caps particle movement to given fraction of cell width, default is 0.5
 
-
-   print("[domain] options:
+   [domain] options:
    x_min (m): Minimum x-coordinate
 
    x_max (m): Maximum x-coordinate
@@ -103,7 +102,7 @@ def configHelp():
 
    z_size (int): Number of cells in z-dimension, ignored if dimensions < 3
 
-   print("[<Species_Name>] options (all species follow this format), one of these must be "e-"
+   [<Species_Name>] options (all species follow this format), one of these must be "e-"
 
    Electron (bool): If this particle is an electron/electron scaled, set this to True. Sets mass scaling according to "mass_ratio" in "[simulation]"
 
