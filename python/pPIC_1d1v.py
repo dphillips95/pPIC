@@ -47,77 +47,77 @@ args = parser.parse_args()
 
 def configHelp():
    # Help with configuration file
-   print("Configuration file help")
-   print("")
-   print("IMPORTANT NOTE: To leave an option blank, omit the equals '=' sign, do NOT delete from config file.")
-   print("")
-   print("")
-   print("[main] options:")
-   print("")
-   print("   unsafe (bool): Ignore dt and dx bounds")
-   print("")
-   print("   seed (int): RNG seed")
-   print("")
-   print("   dimensions (int): Restrict to n dimensions; forces higher dimensions to single box size, dimensions dk = dx")
-   print("")
-   print("   1v (bool): Restrict system to 1D velocity; automatically enforces 1D domain (dimensions = 1)")
-   print("")
-   print("   use_nonlinear_r_interpolation (bool): Use distance-weighted interpolation in cell2r and node2r instead of trilinear")
-   print("")
-   print("")
-   print("[simulation] options:")
-   print("")
-   print("   steps (int): Number of full time steps to run")
-   print("")
-   print("   dt (s): Time step size. If this violates stability bounds then code will abort unless \"unsafe\" option is used")
-   print("")
-   print("   theta (float): Theta parameter for maxwell integration; must be 0.5 <= theta <= 1.0, theta = 0.5 is 2nd order, theta > 0.5 suppresses some oscillations")
-   print("")
-   print("   species_list (str ...): List of species names, separated by spaces. Each species should have its own section of the configuration file [<Species_Name>]. One species must be \"e-\" (electrons).")
-   print("")
-   print("   mass_ratio (float): Ratio of proton to electron mass")
-   print("")
-   print("   rtol (float): gmres relative tolerance, norm(b - A @ x) <= rtol*norm(b)")
-   print("")
-   print("   atol (float): gmres absolute tolerance, norm(b - A @ x) <= atol")
-   print("")
-   print("   Vdt_dx_cap (float): Maximum ratio of time step to dx/maxV, i.e. caps particle movement to given fraction of cell width, default is 0.5")
-   print("")
-   print("")
-   print("[domain] options:")
-   print("   x_min (m): Minimum x-coordinate")
-   print("")
-   print("   x_max (m): Maximum x-coordinate")
-   print("")
-   print("   y_min (m): Minimum y-coordinate, ignored if dimensions < 2. If this and y_max are both unset then places boxes around y = 0, i.e. y_min = -y_size*dx/2")
-   print("")
-   print("   y_max (m): Maximum y-coordinate, ignored if dimensions < 2. If this and y_min are both unset then places boxes around y = 0, i.e. y_max = y_size*dx/2")
-   print("")
-   print("   z_min (m): Minimum z-coordinate, ignored if dimensions < 3. If this and z_max are both unset then places boxes around z = 0, i.e. z_min = -z_size*dx/2")
-   print("")
-   print("   z_max (m): Maximum z-coordinate, ignored if dimensions < 2. If this and z_min are both unset then places boxes around z = 0, i.e. z_max = z_size*dx/2")
-   print("")
-   print("   x_size (int): Number of cells in x-dimension")
-   print("")
-   print("   y_size (int): Number of cells in y-dimension, ignored if dimensions < 2")
-   print("")
-   print("   z_size (int): Number of cells in z-dimension, ignored if dimensions < 3")
-   print("")
-   print("[<Species_Name>] options (all species follow this format), one of these must be \"e-\"")
-   print("")
-   print("   Electron (bool): If this particle is an electron/electron scaled, set this to True. Sets mass scaling according to \"mass_ratio\" in \"[simulation]\"")
-   print("")
-   print("   mass (m_p/m_e): Mass of particle species, in units of protons, or electrons if \"Electron\" is True")
-   print("")
-   print("   charge (e): Charge of particle species in units of elementary charge (i.e. protons = +1 and electrons = -1")
-   print("")
-   print("   temperature (K): Species initial temperature")
-   print("")
-   print("   velocity (m/s): Species initial bulk velocity")
-   print("")
-   print("   density (#/m^3): Species initial number density. For electrons, leave blank to match local charge density and ensure quasi-neutrality")
-   print("")
-   print("   macroparticles_per_cell (#): Species number of macroparticles per cell")
+   print('''Configuration file help
+
+   IMPORTANT NOTE: To leave an option blank, omit the equals '=' sign, do NOT delete from config file.
+
+
+   print("[main] options:
+
+   unsafe (bool): Ignore dt and dx bounds
+
+   seed (int): RNG seed
+
+   dimensions (int): Restrict to n dimensions; forces higher dimensions to single box size, dimensions dk = dx
+
+   1v (bool): Restrict system to 1D velocity; automatically enforces 1D domain (dimensions = 1)
+
+   use_nonlinear_r_interpolation (bool): Use distance-weighted interpolation in cell2r and node2r instead of trilinear
+
+
+   print("[simulation] options:
+
+   steps (int): Number of full time steps to run
+
+   dt (s): Time step size. If this violates stability bounds then code will abort unless "unsafe" option is used
+
+   theta (float): Theta parameter for maxwell integration; must be 0.5 <= theta <= 1.0, theta = 0.5 is 2nd order, theta > 0.5 suppresses some oscillations
+
+   species_list (str ...): List of species names, separated by spaces. Each species should have its own section of the configuration file [<Species_Name>]. One species must be "e-" (electrons).
+
+   mass_ratio (float): Ratio of proton to electron mass
+
+   rtol (float): gmres relative tolerance, norm(b - A @ x) <= rtol*norm(b)
+
+   atol (float): gmres absolute tolerance, norm(b - A @ x) <= atol
+
+   Vdt_dx_cap (float): Maximum ratio of time step to dx/maxV, i.e. caps particle movement to given fraction of cell width, default is 0.5
+
+
+   print("[domain] options:
+   x_min (m): Minimum x-coordinate
+
+   x_max (m): Maximum x-coordinate
+
+   y_min (m): Minimum y-coordinate, ignored if dimensions < 2. If this and y_max are both unset then places boxes around y = 0, i.e. y_min = -y_size*dx/2
+
+   y_max (m): Maximum y-coordinate, ignored if dimensions < 2. If this and y_min are both unset then places boxes around y = 0, i.e. y_max = y_size*dx/2
+
+   z_min (m): Minimum z-coordinate, ignored if dimensions < 3. If this and z_max are both unset then places boxes around z = 0, i.e. z_min = -z_size*dx/2
+
+   z_max (m): Maximum z-coordinate, ignored if dimensions < 2. If this and z_min are both unset then places boxes around z = 0, i.e. z_max = z_size*dx/2
+
+   x_size (int): Number of cells in x-dimension
+
+   y_size (int): Number of cells in y-dimension, ignored if dimensions < 2
+
+   z_size (int): Number of cells in z-dimension, ignored if dimensions < 3
+
+   print("[<Species_Name>] options (all species follow this format), one of these must be "e-"
+
+   Electron (bool): If this particle is an electron/electron scaled, set this to True. Sets mass scaling according to "mass_ratio" in "[simulation]"
+
+   mass (m_p/m_e): Mass of particle species, in units of protons, or electrons if "Electron" is True
+
+   charge (e): Charge of particle species in units of elementary charge (i.e. protons = +1 and electrons = -1
+
+   temperature (K): Species initial temperature
+
+   velocity (m/s): Species initial bulk velocity
+
+   density (#/m^3): Species initial number density. For electrons, leave blank to match local charge density and ensure quasi-neutrality
+
+    macroparticles_per_cell (#): Species number of macroparticles per cell''')
 
 def parse_multiarg_config(config, section, param_name, type_fun = str, divider = " "):
    # Parse parameter from config file with multiple arguments
