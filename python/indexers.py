@@ -52,6 +52,18 @@ def get_index_njit(initial, relative_step, dims):
 
    return new_ind
 
+@njit(cache = True)#, fastmath = True)
+def numba_clip(arr, min_val, max_val):
+   # Numba-compatible version of np.clip
+   shape = arr.shape
+   clipped_arr = arr.flatten()
+   for ii,x in enumerate(clipped_arr):
+      clipped_arr[ii] = min(max(x, min_val), max_val)
+
+   clipped_arr.reshape(shape)
+
+   return clipped_arr
+
 def split_axis(arr, axis, keep_dim = False):
    # Splits numpy array along axis into one array per axis index
    # If keep_dim is False the split axis is dropped from the array dimensions

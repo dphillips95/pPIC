@@ -8,7 +8,7 @@ from numba import njit,int64,float64,guvectorize
 from numba.experimental import jitclass
 
 from interpolators import face2r,cell2r,node2r,face2r_njit,cell2r_njit,node2r_njit
-from indexers import split_axis,numba_unravel_index,CIC_weights_node,CIC_weights_cell
+from indexers import split_axis,numba_unravel_index,CIC_weights_node,CIC_weights_cell,numba_clip
 
 class Pop:
    # Contents:
@@ -164,7 +164,7 @@ def accumulators(pop, dims):
 
 def compute_alpha(pop, faceB, dims):
    # Compute alpha matrix for all particles in population
-   rB = face2r(faceB, pop.r, dims)
+   rB = face2r_njit(faceB, pop.r, dims)
    
    beta = dims.phi*(pop.q*dims.dt)/pop.m
 
@@ -196,7 +196,7 @@ def moveParticles(pop, dstep, dims):
 
 def Lorentz(pop, midNodeE, dims):
    # Accelerate particles via Lorentz force
-   rE = node2r(midNodeE, pop.r, dims)
+   rE = node2r_njit(midNodeE, pop.r, dims)
    
    beta = dims.phi*(pop.q*dims.dt)/pop.m
 
@@ -507,25 +507,14 @@ def apply_boundaries_parts_njit(pop, dims):
 
    del_list = np.repeat(False, pop.Np)
 
-   for ii,(lim,Ng,dg,rep) in enumerate(zip(lims,sizes,dgrid,dims.period)):
-      cond = pop.r[:,ii] < lim[0]
+   for nn,(lim,Ng,dg,rep) in enumerate(zip(lims,sizes,dgrid,dims.period)):
       if rep:
-         while any(cond):
-            pop.r[cond,ii] += Ng*dg
-            cond = pop.r[:,ii] < lim[0]
+         for ii,r in enumerate(pop.r):
+            pop.r[ii,nn] = (r[nn] - lim[0] % lim[1] - lim[0]) + lim[0]
       else:
-         del_list |= cond
-
-      cond = pop.r[:,ii] >= lim[1]
-      if rep:
-         while any(cond):
-            pop.r[cond,ii] -= Ng*dg
-            cond = pop.r[:,ii] >= lim[1]
-         if any(pop.r[:,ii] < lim[0]):
-            raise ValueError("Particle could not be moved back inside domain")
-      else:
-         del_list |= cond
-
+         for ii,r in enumerate(pop.r):
+            del_list[ii] |= r[nn] < lim[0] | r[nn] >= lim[1]
+   
    if any(del_list):
       removeParticle_njit(pop, del_list)
 
@@ -578,16 +567,22 @@ def accumulators_njit(r, v, q, w, dims):
       x_ind_l = x_locs - 1
       if dims.period[2]:
          x_ind_l = x_ind_l % dims.x_size
+      else:
+         x_ind_l = min(max(x_ind_l, 0), dims.x_size - 1)
       x_ind_r = x_locs
 
       y_ind_l = y_locs - 1
       if dims.period[1]:
          y_ind_l = y_ind_l % dims.y_size
+      else:
+         y_ind_l = min(max(y_ind_l, 0), dims.y_size - 1)
       y_ind_r = y_locs
 
       z_ind_l = z_locs - 1
       if dims.period[0]:
          z_ind_l = z_ind_l % dims.z_size
+      else:
+         z_ind_l = min(max(z_ind_l, 0), dims.z_size - 1)
       z_ind_r = z_locs
 
       # CIC weight factors
@@ -702,16 +697,22 @@ def nodeU_njit(pop, dims):
       x_ind1 = x_locs + 1
       if dims.period[2]:
          x_ind1 = np.mod(x_ind1, dims.x_size)
+      else:
+         x_ind1 = np.clip(x_ind1, 0, dims.x_size - 1)
 
       y_ind0 = y_locs
       y_ind1 = y_locs + 1
       if dims.period[1]:
          y_ind1 = np.mod(y_ind1, dims.y_size)
+      else:
+         y_ind1 = np.clip(y_ind1, 0, dims.y_size - 1)
 
       z_ind0 = z_locs
       z_ind1 = z_locs + 1
       if dims.period[0]:
          z_ind1 = np.mod(z_ind1, dims.z_size)
+      else:
+         z_ind1 = np.clip(z_ind1, 0, dims.z_size - 1)
 
       if dims.oneV is True:
          for nn in range(3):
@@ -794,16 +795,22 @@ def nodeU_njit(pop, dims):
 #       x_ind0 = x_locs - 1
 #       if dims.period[2]:
 #          x_ind0 = np.mod(x_ind0, dims.x_size)
+#       else:
+#          x_ind0 = np.clip(x_ind0, 0, dims.x_size - 1)
 #       x_ind1 = x_locs
 #       
 #       y_ind0 = y_locs - 1
 #       if dims.period[1]:
 #          y_ind0 = np.mod(y_ind0, dims.y_size)
+#       else:
+#          y_ind0 = np.clip(y_ind0, 0, dims.y_size - 1)
 #       y_ind1 = y_locs
 #       
 #       z_ind0 = z_locs - 1
 #       if dims.period[0]:
 #          z_ind0 = np.mod(z_ind0, dims.z_size)
+#       else:
+#          z_ind0 = np.clip(z_ind0, 0, dims.z_size - 1)
 #       z_ind1 = z_locs
 #       
 #       if dims.oneV is True:
@@ -867,16 +874,22 @@ def compute_rotated_current_njit(pop_r, pop_v, pop_alpha, q, w, dims):
       x_ind1 = x_locs + 1
       if dims.period[2]:
          x_ind1 = np.mod(x_ind1, dims.x_size)
+      else:
+         x_ind1 = np.clip(x_ind1, 0, dims.x_size - 1)
 
       y_ind0 = y_locs
       y_ind1 = y_locs + 1
       if dims.period[1]:
          y_ind1 = np.mod(y_ind1, dims.y_size)
+      else:
+         y_ind1 = np.clip(y_ind1, 0, dims.y_size - 1)
 
       z_ind0 = z_locs
       z_ind1 = z_locs + 1
       if dims.period[0]:
          z_ind1 = np.mod(z_ind1, dims.z_size)
+      else:
+         z_ind1 = np.clip(z_ind1, 0, dims.z_size - 1)
 
       if dims.oneV is True:
          alpha_v = alpha@v
@@ -937,17 +950,23 @@ def compute_mass_matrices_njit(pop_r, pop_alpha, m, q, w, dims):
       x_ind0 = x_locs
       x_ind1 = x_locs + 1
       if dims.period[2]:
-         x_ind1 = np.mod(x_ind1, dims.x_size)
+         x_ind1 = x_ind1 % dims.x_size
+      else:
+         x_ind1 = min(max(x_ind1, 0), dims.x_size - 1)
 
       y_ind0 = y_locs
       y_ind1 = y_locs + 1
       if dims.period[1]:
-         y_ind1 = np.mod(y_ind1, dims.y_size)
+         y_ind1 = y_ind1 % dims.y_size
+      else:
+         y_ind1 = min(max(y_ind1, 0), dims.y_size - 1)
 
       z_ind0 = z_locs
       z_ind1 = z_locs + 1
       if dims.period[0]:
-         z_ind1 = np.mod(z_ind1, dims.z_size)
+         z_ind1 = z_ind1 % dims.z_size
+      else:
+         z_ind1 = min(max(z_ind1, 0), dims.z_size - 1)
 
       y_ind0 *= dims.x_size
       y_ind1 *= dims.x_size

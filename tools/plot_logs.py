@@ -125,17 +125,17 @@ def plotFigure(t_data, var_data, var_label, unit = None, rescale_x = True, resca
    fig = Figure(figsize = figureSize, frameon = True, layout = "compressed")
 
    ax = fig.subplots(nrows = 1, ncols = 1, squeeze = False)[0,0]
-
+   
    xRange = np.array((np.min(t_data).item(),np.max(t_data).item()))
    if log is True:
       yRange = yRange = np.array((np.min(var_data.where(var_data > 0.0)).item(),np.max(var_data.where(var_data > 0.0)).item()))
    else:
       yRange = np.array((np.min(var_data).item(),np.max(var_data).item()))
    
-   if any(np.isnan(yRange)) or all(np.abs(yRange) < 1e-17):
+   if any(np.isnan(yRange)) or all(np.abs(yRange) == 0):
       yRange[0] = -0.05
       yRange[1] = 0.05
-   elif yRange[1] - yRange[0] < 1e-15*yRange[1]:
+   elif np.max(np.abs(yRange)) == np.min(np.abs(yRange)):
       mid = np.mean(yRange)
       if mid == 0:
          diff = 0.05

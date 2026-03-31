@@ -18,7 +18,7 @@ import logging
 import types
 
 from indexers import split_axis,floatToStr,shift_indices,shift_indices_njit
-from interpolators import face2cell,face2node,face2r,cell2node,cell2face,cell2r,cell2r,node2face,node2cell,node2r,face2cell_njit,face2node_njit,face2r_njit,cell2node_njit,cell2face_njit,cell2r_njit,node2face_njit,node2cell_njit,node2r_njit,curl_face2node,curl_face2node_njit,curl_node2face,curl_node2face_njit,get_operator_curl_face2node,get_operator_curl_node2face
+from interpolators import face2cell,face2node,face2r,cell2node,cell2face,cell2r,node2face,node2cell,node2r,div_face2cell,div_node2cell,curl_face2node,curl_node2face,face2cell_njit,face2node_njit,face2r_njit,cell2node_njit,cell2face_njit,cell2r_njit,node2face_njit,node2cell_njit,node2r_njit,div_face2cell_njit,div_node2cell_njit,curl_face2node_njit,curl_node2face_njit,face2cell_njit_alt,face2node_njit_alt,cell2node_njit_alt,cell2face_njit_alt,node2face_njit_alt,node2cell_njit_alt,div_face2cell_njit_alt,div_node2cell_njit_alt,curl_face2node_njit_alt,curl_node2face_njit_alt,get_operator_curl_face2node,get_operator_curl_node2face
 from populations import Pop,compute_alpha,moveParticles,Lorentz,compute_rotated_current,compute_mass_matrices,accumulators,calcNodeData,Pop_njit,compute_alpha_njit,moveParticles_njit,Lorentz_njit,compute_rotated_current_njit,compute_mass_matrices_njit
 from fields import Fields,upwind_fields
 from output import save_data
@@ -497,6 +497,8 @@ def test_interpolators(function = None):
          "face2cell",
          "face2node",
          "face2r",
+         "div_face2cell",
+         "div_node2cell",
          "curl_face2node",
          "curl_node2face"
          ]
@@ -517,14 +519,17 @@ def test_interpolators(function = None):
          if func == "cell2face":
             c2f = cell2face(cell_v, dims)
             c2f_njit = cell2face_njit(cell_v, dims)
-            compare("cell2face:        ", c2f, c2f_njit)
+            c2f_njit_alt = cell2face_njit_alt(cell_v, dims)
+            compare("cell2face:        ", (c2f,c2f_njit,c2f_njit_alt))
          elif func == "cell2node":
             c2n_s = cell2node(cell_s, dims)
             c2n_v = cell2node(cell_v, dims)
             c2n_s_njit = cell2node_njit(cell_s, dims)
             c2n_v_njit = cell2node_njit(cell_v, dims)
-            compare("cell2node scalar: ", c2n_s, c2n_s_njit)
-            compare("cell2node vector: ", c2n_v, c2n_v_njit)
+            c2n_s_njit_alt = cell2node_njit_alt(cell_s, dims)
+            c2n_v_njit_alt = cell2node_njit_alt(cell_v, dims)
+            compare("cell2node scalar: ", (c2n_s,c2n_s_njit,c2n_s_njit_alt))
+            compare("cell2node vector: ", (c2n_v,c2n_v_njit,c2n_v_njit_alt))
          elif func == "cell2r":
             c2r_s_l = cell2r(cell_s, r, dims)
             c2r_v_l = cell2r(cell_v, r, dims)
@@ -534,12 +539,12 @@ def test_interpolators(function = None):
             c2r_v_l_njit = cell2r_njit(cell_v, r, dims)
             c2r_s_n_njit = cell2r_njit(cell_s, r, dims_n)
             c2r_v_n_njit = cell2r_njit(cell_v, r, dims_n)
-            compare("cell2r scalar:    ", c2r_s_l, c2r_s_l_njit)
-            compare("cell2r vector:    ", c2r_v_l, c2r_v_l_njit)
-            compare("cell2r scalar:    ", c2r_s_n, c2r_s_n_njit)
-            compare("cell2r vector:    ", c2r_v_n, c2r_v_n_njit)
+            compare("cell2r scalar:    ", (c2r_s_l,c2r_s_l_njit))
+            compare("cell2r vector:    ", (c2r_v_l,c2r_v_l_njit))
+            compare("cell2r scalar:    ", (c2r_s_n,c2r_s_n_njit))
+            compare("cell2r vector:    ", (c2r_v_n,c2r_v_n_njit))
 
-      if func.startswith("node"):
+      elif func.startswith("node"):
          # node_s = np.array(range(dims.Ncells_total), dtype = float).reshape(dims.dim_scalar)
          # node_v = np.array(range(dims.Ncells_total*3), dtype = float).reshape(dims.dim_vector)
          
@@ -549,14 +554,17 @@ def test_interpolators(function = None):
          if func == "node2face":
             n2f = node2face(node_v, dims)
             n2f_njit = node2face_njit(node_v, dims)
-            compare("node2face:        ", n2f, n2f_njit)
+            n2f_njit_alt = node2face_njit_alt(node_v, dims)
+            compare("node2face:        ", (n2f,n2f_njit,n2f_njit_alt))
          elif func == "node2cell":
             n2c_s = node2cell(node_s, dims)
             n2c_v = node2cell(node_v, dims)
             n2c_s_njit = node2cell_njit(node_s, dims)
             n2c_v_njit = node2cell_njit(node_v, dims)
-            compare("node2cell scalar: ", n2c_s, n2c_s_njit)
-            compare("node2cell vector: ", n2c_v, n2c_v_njit)
+            n2c_s_njit_alt = node2cell_njit_alt(node_s, dims)
+            n2c_v_njit_alt = node2cell_njit_alt(node_v, dims)
+            compare("node2cell scalar: ", (n2c_s,n2c_s_njit,n2c_s_njit_alt))
+            compare("node2cell vector: ", (n2c_v,n2c_v_njit,n2c_v_njit_alt))
          elif func == "node2r":
             n2r_s_l = node2r(node_s, r, dims)
             n2r_v_l = node2r(node_v, r, dims)
@@ -566,13 +574,13 @@ def test_interpolators(function = None):
             n2r_v_l_njit = node2r_njit(node_v, r, dims)
             n2r_s_n_njit = node2r_njit(node_s, r, dims_n)
             n2r_v_n_njit = node2r_njit(node_v, r, dims_n)
-            compare("node2r scalar:    ", n2r_s_l, n2r_s_l_njit)
-            compare("node2r vector:    ", n2r_v_l, n2r_v_l_njit)
-            compare("node2r scalar:    ", n2r_s_n, n2r_s_n_njit)
-            compare("node2r vector:    ", n2r_v_n, n2r_v_n_njit)
+            compare("node2r scalar:    ", (n2r_s_l,n2r_s_l_njit))
+            compare("node2r vector:    ", (n2r_v_l,n2r_v_l_njit))
+            compare("node2r scalar:    ", (n2r_s_n,n2r_s_n_njit))
+            compare("node2r vector:    ", (n2r_v_n,n2r_v_n_njit))
    
 
-      if func.startswith("face"):
+      elif func.startswith("face"):
          # face = np.array(range(dims.Ncells_total*3), dtype = float).reshape(dims.dim_vector)
          
          face = rng.uniform(-1, 1, dims.dim_vector)
@@ -580,81 +588,100 @@ def test_interpolators(function = None):
          if func == "face2cell":
             f2c = face2cell(face, dims)
             f2c_njit = face2cell_njit(face, dims)
-            compare("face2cell:        ", f2c, f2c_njit)
+            f2c_njit_alt = face2cell_njit_alt(face, dims)
+            compare("face2cell:        ", (f2c,f2c_njit,f2c_njit_alt))
          elif func == "face2node":   
             f2n = face2node(face, dims)
             f2n_njit = face2node_njit(face, dims)
-            compare("face2node:        ", f2n, f2n_njit)
+            f2n_njit_alt = face2node_njit_alt(face, dims)
+            compare("face2node:        ", (f2n,f2n_njit,f2n_njit_alt))
          elif func == "face2r":
             f2r = face2r(face, r, dims)
             f2r_njit = face2r_njit(face, r, dims)
-            compare("face2r:           ", f2r, f2r_njit)
-      
-      if func.startswith("curl"):
+            compare("face2r:           ", (f2r,f2r_njit))
+
+      elif func.startswith("div"):
+         # face = np.array(range(dims.Ncells_total*3), dtype = float).reshape(dims.dim_vector)
+         face = rng.uniform(-1, 1, dims.dim_vector)
+
+         # node = np.array(range(dims.Ncells_total*3), dtype = float).reshape(dims.dim_vector)
+         node = rng.uniform(-1, 1, dims.dim_vector)
+
+         if func == "div_face2cell":
+            div_f2c = div_face2cell(face, dims)
+            div_f2c_njit = div_face2cell_njit(face, dims)
+            div_f2c_njit_alt = div_face2cell_njit_alt(face, dims)
+            compare("div_face2cell:    ",
+                    (div_f2c,div_f2c_njit,div_f2c_njit_alt))
+         elif func == "div_node2cell":
+            div_n2c = div_node2cell(node, dims)
+            div_n2c_njit = div_node2cell_njit(node, dims)
+            div_n2c_njit_alt = div_node2cell_njit_alt(node, dims)
+            compare("div_node2cell:    ",
+                    (div_n2c,div_n2c_njit,div_n2c_njit_alt))
+            
+      elif func.startswith("curl"):
+         # face = np.array(range(dims.Ncells_total*3), dtype = float).reshape(dims.dim_vector)
+         face = rng.uniform(-1, 1, dims.dim_vector)
+
+         # node = np.array(range(dims.Ncells_total*3), dtype = float).reshape(dims.dim_vector)
+         node = rng.uniform(-1, 1, dims.dim_vector)
+
          if func == "curl_face2node":
-            # face = np.array(range(dims.Ncells_total*3), dtype = float).reshape(dims.dim_vector)
-            face = rng.uniform(-1, 1, dims.dim_vector)
-            # face = np.zeros(dims.dim_vector)
-            # face[1,1,1,0] = 1
             curl_f2n = curl_face2node(face, dims)
             curl_f2n_njit = curl_face2node_njit(face, dims)
-            compare("curl_face2node:   ", curl_f2n, curl_f2n_njit)
-         elif func == "curl_node2face":
-            # node = np.array(range(dims.Ncells_total*3), dtype = float).reshape(dims.dim_vector)
-            node = rng.uniform(-1, 1, dims.dim_vector)
-            curl_n2f = curl_node2face(node, dims)
-            curl_n2f_njit = curl_node2face_njit(node, dims)
-            compare("curl_node2face:   ", curl_n2f, curl_n2f_njit)
-         elif func == "curl_face2node_operator":
-            face = rng.uniform(-1, 1, dims.dim_vector)
-            curl_f2n = curl_face2node(face, dims)
+            curl_f2n_njit_alt = curl_face2node_njit_alt(face, dims)
             operator = get_operator_curl_face2node(dims)
             curl_f2n_op = (operator@face.flat).reshape(dims.dim_vector)
-            compare("curl_face2node_op:", curl_f2n, curl_f2n_op)
-         elif func == "curl_node2face_operator":
-            node = rng.uniform(-1, 1, dims.dim_vector)
-            # node = np.zeros(dims.dim_vector)
-            # node[0,0,1,0] = 1
+            compare("curl_face2node:   ",
+                    (curl_f2n,curl_f2n_njit,curl_f2n_njit_alt,curl_f2n_op))
+         elif func == "curl_node2face":
             curl_n2f = curl_node2face(node, dims)
+            curl_n2f_njit = curl_node2face_njit(node, dims)
+            curl_n2f_njit_alt = curl_node2face_njit_alt(node, dims)
             operator = get_operator_curl_node2face(dims)
             curl_n2f_op = (operator@node.flat).reshape(dims.dim_vector)
-            compare("curl_node2face_op:", curl_n2f, curl_n2f_op)
+            compare("curl_node2face:   ",
+                    (curl_n2f,curl_n2f_njit,curl_n2f_njit_alt,curl_n2f_op))
             
    print("")
    
    interp_timers = my_timers()
    interp_timers_njit = my_timers()
+   interp_timers_njit_alt = my_timers()
    tests_dict = {
-      "cell2face":[("c2f",     cell2face, cell2face_njit, "vector", None)],
+      "cell2face":[("c2f",     (cell2face,cell2face_njit,cell2face_njit_alt), "vector", None)],
       "cell2node":[
-         ("c2n_s",   cell2node, cell2node_njit, "scalar", None),
-         ("c2n_v",   cell2node, cell2node_njit, "vector", None)
+         ("c2n_s",   (cell2node,cell2node_njit,cell2node_njit_alt), "scalar", None),
+         ("c2n_v",   (cell2node,cell2node_njit,cell2node_njit_alt), "vector", None)
          ],
       "cell2r":[
-         ("c2r_s_l", cell2r,    cell2r_njit,    "scalar", True),
-         ("c2r_v_l", cell2r,    cell2r_njit,    "vector", True),
-         ("c2r_s_n", cell2r,    cell2r_njit,    "scalar", False),
-         ("c2r_v_n", cell2r,    cell2r_njit,    "vector", False),
+         ("c2r_s_l", (cell2r,cell2r_njit),    "scalar", True),
+         ("c2r_v_l", (cell2r,cell2r_njit),    "vector", True),
+         ("c2r_s_n", (cell2r,cell2r_njit),    "scalar", False),
+         ("c2r_v_n", (cell2r,cell2r_njit),    "vector", False),
       ],
-      "node2face":[("n2f",     node2face, node2face_njit, "vector", None)],
+      "node2face":[("n2f",     (node2face,node2face_njit,node2face_njit_alt), "vector", None)],
       "node2cell":[
-         ("n2c_s",   node2cell, node2cell_njit, "scalar", None),
-         ("n2c_v",   node2cell, node2cell_njit, "vector", None),
+         ("n2c_s",   (node2cell,node2cell_njit,node2cell_njit_alt), "scalar", None),
+         ("n2c_v",   (node2cell,node2cell_njit,node2cell_njit_alt), "vector", None),
       ],
       "node2r":[
-         ("n2r_s_l", node2r,    node2r_njit,    "scalar", True),
-         ("n2r_v_l", node2r,    node2r_njit,    "vector", True),
-         ("n2r_s_n", node2r,    node2r_njit,    "scalar", False),
-         ("n2r_v_n", node2r,    node2r_njit,    "vector", False),
+         ("n2r_s_l", (node2r,node2r_njit),    "scalar", True),
+         ("n2r_v_l", (node2r,node2r_njit),    "vector", True),
+         ("n2r_s_n", (node2r,node2r_njit),    "scalar", False),
+         ("n2r_v_n", (node2r,node2r_njit),    "vector", False),
       ],
-      "face2cell":[("f2c",     face2cell, face2cell_njit, "vector", None)],
-      "face2node":[("f2n",     face2node, face2node_njit, "vector", None)],
+      "face2cell":[("f2c",     (face2cell,face2cell_njit,face2cell_njit_alt), "vector", None)],
+      "face2node":[("f2n",     (face2node,face2node_njit,face2node_njit_alt), "vector", None)],
       "face2r":[
-         ("f2r_l",   face2r,    face2r_njit,    "vector", True),
-         ("f2r_n",   face2r,    face2r_njit,    "vector", False),
+         ("f2r_l",   (face2r,face2r_njit),    "vector", True),
+         ("f2r_n",   (face2r,face2r_njit),    "vector", False),
       ],
-      "curl_face2node":[("c_f2n",   curl_face2node, curl_face2node_njit, "vector", None)],
-      "curl_node2face":[("c_n2f",   curl_node2face, curl_node2face_njit, "vector", None)]
+      "div_face2cell":[("d_f2c",   (div_face2cell,div_face2cell_njit,div_face2cell_njit_alt), "vector", None)],
+      "div_node2cell":[("d_n2c",   (div_node2cell,div_node2cell_njit,div_node2cell_njit_alt), "vector", None)],
+      "curl_face2node":[("c_f2n",   (curl_face2node,curl_face2node_njit,curl_face2node_njit_alt), "vector", None)],
+      "curl_node2face":[("c_n2f",   (curl_node2face,curl_node2face_njit,curl_node2face_njit_alt), "vector", None)]
    }
 
    tests = []
@@ -664,6 +691,7 @@ def test_interpolators(function = None):
    for timer_name,*_ in tests:
       interp_timers.start(timer_name)
       interp_timers_njit.start(timer_name)
+      interp_timers_njit_alt.start(timer_name)
 
    loops = 100
    
@@ -694,7 +722,7 @@ def test_interpolators(function = None):
    test_dims_n = Dims(*test_dims.copy())
    test_dims_n.linear = False
    
-   for name,function,function_njit,array_type,linear in tests:
+   for name,functions,array_type,linear in tests:
       for ii in range(loops):
          if array_type == "scalar":
             array_dim = test_dims.dim_scalar
@@ -702,7 +730,9 @@ def test_interpolators(function = None):
             array_dim = test_dims.dim_vector
          array = rng.uniform(-1, 1, array_dim)
 
-         if function.__name__.endswith("r"):
+         no_alt = True
+         if functions[0].__name__.endswith("r"):
+            function,function_njit = functions
             r = rng.uniform((test_dims.x_min,test_dims.y_min,test_dims.z_min), (test_dims.x_max,test_dims.y_max,test_dims.z_max), (Np_test,3))
             if function.__name__.startswith("face"):
                interp_timers.tic(name)
@@ -730,6 +760,8 @@ def test_interpolators(function = None):
                   res_njit = function_njit(array, r, test_dims_n)
                   interp_timers_njit.toc(name)
          else:
+            no_alt = False
+            function,function_njit,function_njit_alt = functions
             interp_timers.tic(name)
             res = function(array, test_dims)
             interp_timers.toc(name)
@@ -737,13 +769,23 @@ def test_interpolators(function = None):
             interp_timers_njit.tic(name)
             res_njit = function_njit(array, test_dims)
             interp_timers_njit.toc(name)
+
+            interp_timers_njit_alt.tic(name)
+            res_njit_alt = function_njit_alt(array, test_dims)
+            interp_timers_njit_alt.toc(name)
       
       print_string = function.__name__
       print_string_njit = function_njit.__name__
+      if no_alt:
+         print_string_njit_alt = None
+      else:
+         print_string_njit_alt = function_njit_alt.__name__
       if "face" not in function.__name__:
          print_string += " " + array_type
          print_string_njit += " " + array_type
-      if function.__name__.endswith("r"):
+         if not no_alt:
+            print_string_njit_alt += " " + array_type
+      if no_alt:
          if linear:
             print_string += " linear"
             print_string_njit += " linear"
@@ -751,33 +793,56 @@ def test_interpolators(function = None):
             print_string += " non-linear"
             print_string_njit += " non-linear"
 
-      print_ratio = print_string + " ratio:"
+      print_ratio = print_string + " njit ratio:"
+      if not no_alt:
+         print_ratio_alt = print_string + " njit_alt ratio:"
             
       print_string += ": "
       print_string_njit += ": "
-      
-      print_ratio = print_ratio.ljust(32)
-      print_string = print_string.ljust(32)
-      print_string_njit = print_string_njit.ljust(32)
+      if not no_alt:
+         print_string_njit_alt += ": "
+            
+      print_ratio = print_ratio.ljust(38)
+      print_string = print_string.ljust(38)
+      print_string_njit = print_string_njit.ljust(38)
+      if not no_alt:
+         print_ratio_alt = print_ratio_alt.ljust(38)
+         print_string_njit_alt = print_string_njit_alt.ljust(38)
 
       print_string += str(interp_timers.timers[name])
       print_string_njit += str(interp_timers_njit.timers[name])
       print_ratio += str(interp_timers.timers[name] / interp_timers_njit.timers[name])
+      if not no_alt:
+         print_string_njit_alt += str(interp_timers_njit_alt.timers[name])
+         print_ratio_alt += str(interp_timers.timers[name] / interp_timers_njit_alt.timers[name])
       
       print(print_string)
       print(print_string_njit)
+      if not no_alt:
+         print(print_string_njit_alt)
       print(print_ratio)
+      if not no_alt:
+         print(print_ratio_alt)
       print("")
 
    exit()
       
-def compare(name, first, second):
-   if all(first.flat == 0) and all(second.flat == 0):
-      test = True
+def compare(name, items, tol = 1e-15):
+   # Compare two or more ndarrays in items
+   test = True
+   for dat in items:
+      test &= all(dat.flat == 0)
+      
+   if test:
+      print(name + str([Test]*(len(items) - 1)))
    else:
-      test = all((np.abs(first - second)/max(np.max(np.abs(first)),np.max(np.abs(second)))).flat < 1e-15)
+      base_max = np.max(np.abs(items[0]))
+      test = np.empty(len(items) - 1, dtype = np.bool)
+      for ii,dat in enumerate(items[1:]):
+         local_max = max(base_max, np.max(np.abs(dat)))
+         test[ii] = all((np.abs(items[0] - dat)/local_max).flat < tol)
 
-   print(name + str(test))
+      print(name + str(test))
    
 def cap_dt(pops):
    # Restrict dt if necessary, or expand
@@ -1019,7 +1084,7 @@ if __name__ == '__main__':
          if pop.static is False:
             mass_matrices += compute_mass_matrices_njit(
                pop.r, pop.alpha, pop.m, pop.q, pop.w, dims)
-
+      
       timers.toc("mass matrices")
       timers.tic("maxwell")
 
