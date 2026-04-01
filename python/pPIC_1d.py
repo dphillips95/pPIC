@@ -50,9 +50,6 @@ parser.add_argument("--test", type = str, nargs = '*',
                     help = "Test interpolators and quit")
 args = parser.parse_args()
 
-if args.config == "help":
-   configHelp()
-
 def configHelp():
    # Help with configuration file
    print('''Configuration file help
@@ -62,69 +59,102 @@ def configHelp():
 
    [main] options:
 
-   unsafe (bool): Ignore dt and dx bounds
+      unsafe (bool): Ignore dt and dx bounds
 
-   seed (int): RNG seed
+      seed (int): RNG seed
 
-   dimensions (int): Restrict to n dimensions; forces higher dimensions to single box size, dimensions dk = dx
+      dimensions (int): Restrict to n dimensions; forces higher dimensions to single box size, dimensions dk = dx
 
-   1v (bool): Restrict system to 1D velocity; automatically enforces 1D domain (dimensions = 1)
+      1v (bool): Restrict system to 1D velocity; automatically enforces 1D domain (dimensions = 1)
 
-   use_nonlinear_r_interpolation (bool): Use distance-weighted interpolation in cell2r and node2r instead of trilinear
+      use_nonlinear_r_interpolation (bool): Use distance-weighted interpolation in cell2r and node2r instead of trilinear
 
 
    [simulation] options:
 
-   steps (int): Number of full time steps to run
+      steps (int): Number of full time steps to run
 
-   dt (s): Time step size. If this violates stability bounds then code will abort unless "unsafe" option is used
+      dt (s): Time step size. If this violates stability bounds then code will abort unless "unsafe" option is used
 
-   theta (float): Theta parameter for maxwell integration; must be 0.5 <= theta <= 1.0, theta = 0.5 is 2nd order, theta > 0.5 suppresses some oscillations
+      theta (float): Theta parameter for maxwell integration; must be 0.5 <= theta <= 1.0, theta = 0.5 is 2nd order, theta > 0.5 suppresses some oscillations
 
-   species_list (str ...): List of species names, separated by spaces. Each species should have its own section of the configuration file [<Species_Name>]. One species must be "e-" (electrons).
+      species_list (str ...): List of species names, separated by spaces. Each species should have its own section of the configuration file [<Species_Name>]. One species must be "e-" (electrons).
 
-   mass_ratio (float): Ratio of proton to electron mass
+      mass_ratio (float): Ratio of proton to electron mass
 
-   rtol (float): gmres relative tolerance, norm(b - A @ x) <= rtol*norm(b)
+      rtol (float): gmres relative tolerance, norm(b - A @ x) <= rtol*norm(b)
 
-   atol (float): gmres absolute tolerance, norm(b - A @ x) <= atol
+      atol (float): gmres absolute tolerance, norm(b - A @ x) <= atol
 
-   Vdt_dx_cap (float): Maximum ratio of time step to dx/maxV, i.e. caps particle movement to given fraction of cell width, default is 0.5
+      Vdt_dx_cap (float): Maximum ratio of time step to dx/maxV, i.e. caps particle movement to given fraction of cell width, default is 0.5
+
+      save_steps (int): Number of iteration steps between saving data to file
+
 
    [domain] options:
-   x_min (m): Minimum x-coordinate
 
-   x_max (m): Maximum x-coordinate
+      x_min (m): Minimum x-coordinate
+      x_max (m): Maximum x-coordinate
 
-   y_min (m): Minimum y-coordinate, ignored if dimensions < 2. If this and y_max are both unset then places boxes around y = 0, i.e. y_min = -y_size*dx/2
+      y_min (m): Minimum y-coordinate, ignored if dimensions < 2. If this and y_max are both unset then places boxes around y = 0, i.e. y_min = -y_size*dx/2
+      y_max (m): Maximum y-coordinate, ignored if dimensions < 2. If this and y_min are both unset then places boxes around y = 0, i.e. y_max = y_size*dx/2
 
-   y_max (m): Maximum y-coordinate, ignored if dimensions < 2. If this and y_min are both unset then places boxes around y = 0, i.e. y_max = y_size*dx/2
+      z_min (m): Minimum z-coordinate, ignored if dimensions < 3. If this and z_max are both unset then places boxes around z = 0, i.e. z_min = -z_size*dx/2
+      z_max (m): Maximum z-coordinate, ignored if dimensions < 2. If this and z_min are both unset then places boxes around z = 0, i.e. z_max = z_size*dx/2
 
-   z_min (m): Minimum z-coordinate, ignored if dimensions < 3. If this and z_max are both unset then places boxes around z = 0, i.e. z_min = -z_size*dx/2
+      x_size (int): Number of cells in x-dimension
+      y_size (int): Number of cells in y-dimension, ignored if dimensions < 2
+      z_size (int): Number of cells in z-dimension, ignored if dimensions < 3
 
-   z_max (m): Maximum z-coordinate, ignored if dimensions < 2. If this and z_min are both unset then places boxes around z = 0, i.e. z_max = z_size*dx/2
+      x_periodic (bool): Set x-dimension as periodic
+      y_periodic (bool): Set y-dimension as periodic
+      z_periodic (bool): Set z-dimension as periodic
 
-   x_size (int): Number of cells in x-dimension
+   [magnetic field] options:
 
-   y_size (int): Number of cells in y-dimension, ignored if dimensions < 2
+      type (str): space-separated list of initial magnetic field configurations, configurations will be summed for final configuration. Current types: 
+         uniform = constant B everywhere, set with Bx,By,Bz
+      
+      Bx (float): Initial Bx to be used with \'uniform\' field type
+      By (float): Initial By to be used with \'uniform\' field type
+      Bz (float): Initial Bz to be used with \'uniform\' field type
 
-   z_size (int): Number of cells in z-dimension, ignored if dimensions < 3
+   [electric field] options:
 
-   [<Species_Name>] options (all species follow this format), one of these must be "e-"
+      type (str): space-separated list of initial electric field configurations, configurations will be summed for final configuration. Current types: 
+         uniform = constant E everywhere, set with Ex,Ey,Ez
+         UeB_cross = E set to -Ue cross B, where Ue is the electron velocity averaged over all electron populations
+         rand = random uniform distribution of Ex,Ey, and Ez; limits are set with rand_Ex,randEy,randEz
 
-   Electron (bool): If this particle is an electron/electron scaled, set this to True. Sets mass scaling according to "mass_ratio" in "[simulation]"
+      Ex (float): Initial Ex to be used with \'uniform\' field type
+      Ey (float): Initial Ey to be used with \'uniform\' field type
+      Ez (float): Initial Ez to be used with \'uniform\' field type
 
-   mass (m_p/m_e): Mass of particle species, in units of protons, or electrons if "Electron" is True
+      rand_Ex_min (float): Minimum limit of random uniform distribution of Ex
+      rand_Ex_max (float): Maximum limit of random uniform distribution of Ex
+      rand_Ey_min (float): Minimum limit of random uniform distribution of Ey
+      rand_Ey_max (float): Maximum limit of random uniform distribution of Ey
+      rand_Ez_min (float): Minimum limit of random uniform distribution of Ez
+      rand_Ez_max (float): Maximum limit of random uniform distribution of Ez
 
-   charge (e): Charge of particle species in units of elementary charge (i.e. protons = +1 and electrons = -1
 
-   temperature (K): Species initial temperature
+   [<Species_Name>] options (all species follow this format)
 
-   velocity (m/s): Species initial bulk velocity
+      Electron (bool): If this particle is an electron/electron scaled, set this to True. Sets mass scaling according to "mass_ratio" in "[simulation]"
 
-   density (#/m^3): Species initial number density. For electrons, leave blank to match local charge density and ensure quasi-neutrality
+      mass (m_p/m_e): Mass of particle species, in units of protons, or electrons if "Electron" is True
 
-   macroparticles_per_cell (#): Species number of macroparticles per cell''')
+      charge (e): Charge of particle species in units of elementary charge (i.e. protons = +1 and electrons = -1
+
+      temperature (K): Species initial temperature
+
+      velocity (m/s): Species initial bulk velocity
+
+      density (#/m^3): Species initial number density. For electrons, leave blank to match local charge density and ensure quasi-neutrality
+
+      macroparticles_per_cell (#): Species number of macroparticles per cell
+
+      static (bool): Fix species in place; do not update positions or velocities. Current and charge densities still accumulated''')
 
    sys.exit()
 
@@ -969,7 +999,10 @@ def cap_dt(pops):
    logger.info("dt*omega_pe = " + str(dims.dt*plasma_freq))
    logger.info("dt*omega_ce = " + str(dims.dt*electron_gyro))
    logger.info("dt/dt_yee = " + str(dims.dt/dt_yee))
-   
+
+if args.config == "help":
+   configHelp()
+
 args,config = readConfig(args.config, args)
 
 dt = args.dt
@@ -1111,7 +1144,7 @@ if __name__ == '__main__':
       config.getfloat("electric_field", "Ez")
    )
 
-   fields = Fields(pops, B_types, B_init, E_types, E_init, rng, dims)
+   fields = Fields(pops, B_types, B_init, E_types, config, rng, dims)
 
    cap_dt(pops)
 

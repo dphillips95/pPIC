@@ -10,7 +10,7 @@ class Fields:
    # faceB:     face magnetic fields
    # nodeB:     node magnetic fields
    # nodeE:     node electric field
-   def __init__(self, pops, B_types, B_init, E_types, E_init, rng, dims):
+   def __init__(self, pops, B_types, E_types, config, rng, dims):
       # Initialise all fields
       print("")
       print("Initialising all fields")
@@ -18,22 +18,20 @@ class Fields:
       self.faceB = np.zeros(dims.dim_vector)
       self.nodeE = np.zeros(dims.dim_vector)
       
-      Bx,By,Bz = B_init
-      if dims.oneV is True:
-         By = Bz = 0
-      
       for B_type in B_types:
          if B_type == "uniform":
+            Bx = config.getfloat("magnetic_field", "Bx")
+            By = config.getfloat("magnetic_field", "By")
+            Bz = config.getfloat("magnetic_field", "Bz")
+
+            if dims.oneV is True:
+               By = Bz = 0
             self.faceB[:,:,:,0] += Bx
             self.faceB[:,:,:,1] += By
             self.faceB[:,:,:,2] += Bz
       apply_boundaries_fields(self.faceB, dims)
       
       self.update_fields(pops, dims)
-
-      Ex,Ey,Ez = E_init
-      if dims.oneV is True:
-         Ey = Ez = 0
       
       for E_type in E_types:
          if E_type == "UeB_cross":
@@ -43,10 +41,24 @@ class Fields:
                nodeUe = np.zeros(dims.dim_vector)
             self.nodeE -= np.cross(nodeUe, self.nodeB)
          elif E_type == "uniform":
+            Ex = config.getfloat("electric_field", "Ex")
+            Ey = config.getfloat("electric_field", "Ey")
+            Ez = config.getfloat("electric_field", "Ez")
+
+            if dims.oneV is True:
+               Ey = Ez = 0
+            
             self.nodeE[:,:,:,0] += Ex
             self.nodeE[:,:,:,1] += Ey
             self.nodeE[:,:,:,2] += Ez
          elif E_type == "rand":
+            Ex = config.getfloat("electric_field", "Ex")
+            Ey = config.getfloat("electric_field", "Ey")
+            Ez = config.getfloat("electric_field", "Ez")
+
+            if dims.oneV is True:
+               Ey = Ez = 0
+            
             self.nodeE = rng.uniform(-1, 1, dims.dim_vector)
       
       apply_boundaries_fields(self.nodeE, dims)
