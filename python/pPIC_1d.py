@@ -49,6 +49,9 @@ parser.add_argument("--test", type = str, nargs = '*',
                     help = "Test interpolators and quit")
 args = parser.parse_args()
 
+if args.config == "help":
+   configHelp()
+
 def configHelp():
    # Help with configuration file
    print("Configuration file help")
@@ -122,6 +125,8 @@ def configHelp():
    print("   density (#/m^3): Species initial number density. For electrons, leave blank to match local charge density and ensure quasi-neutrality")
    print("")
    print("   macroparticles_per_cell (#): Species number of macroparticles per cell")
+
+   sys.exit()
 
 def parse_multiarg_config(config, section, param_name, type_fun = str, divider = " "):
    # Parse parameter from config file with multiple arguments
