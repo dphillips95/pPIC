@@ -1168,8 +1168,8 @@ def get_operator_curl_face2node(dims):
          for ii in range(dims.x_size):
             base_node = np.array((kk,jj,ii), dtype = int64)
             shift_indices = get_index_njit(base_node, shift, dims)
-            cell_ids = 3*numba_ravel_multi_index(
-               shift_indices, dims.dim_scalar)
+            cell_ids = 3*numba_ravel_multi_index(shift_indices,
+                                                 dims.dim_scalar)
             
             row = cell_ids[0]
 
@@ -1217,8 +1217,8 @@ def get_operator_curl_node2face(dims):
          for ii in range(dims.x_size):
             base_node = np.array((kk,jj,ii), dtype = int64)
             shift_indices = get_index_njit(base_node, shift, dims)
-            cell_ids = 3*numba_ravel_multi_index(
-               shift_indices, dims.dim_scalar)
+            cell_ids = 3*numba_ravel_multi_index(shift_indices,
+                                                 dims.dim_scalar)
 
             row = cell_ids[0]
 
@@ -1258,3 +1258,161 @@ def get_operator_curl_node2face(dims):
    operator *= 0.5
 
    return operator
+
+@ftools.lru_cache(maxsize = 128)
+@njit(cache = True)#, fastmath = True)
+def get_operator_coo_curl_face2node(dims):
+   # Returns the 3D curl operator for node2face data in coo matrix arrays
+   data = np.empty(3*8*dims.Ncells_total, dtype = float64)
+   cols = np.empty(3*8*dims.Ncells_total, dtype = int64)
+
+   sub_data = np.empty(3*8, dtype = float64)
+   sub_rows = np.empty(3*8, dtype = float64)
+   
+   sub_data[0] = 1/dims.dz
+   sub_data[1] = -1/dims.dz
+   sub_data[2] = 1/dims.dy
+   sub_data[3] = -1/dims.dy
+   sub_data[4:8] = sub_data[0:4]
+
+   sub_data[8] = 1/dims.dx
+   sub_data[9] = -1/dims.dx
+   sub_data[10] = 1/dims.dz
+   sub_data[11] = -1/dims.dz
+   sub_data[12:16] = sub_data[8:12]
+
+   sub_data[16] = 1/dims.dy
+   sub_data[17] = -1/dims.dy
+   sub_data[18] = 1/dims.dx
+   sub_data[19] = -1/dims.dx
+   sub_data[20:24] = sub_data[16:20]
+
+   for ii in range(dims.Ncells_total):
+      data[24*ii:24*(ii+1)] = 0.5*sub_data
+
+   sub_rows = np.arange(3*dims.Ncells_total, dtype = int64)
+   rows = np.repeat(sub_rows, 8)
+   
+   shift = np.array([[0,0,0], [0,0,-1], [0,-1,0], [0,-1,-1],
+                     [-1,0,0], [-1,0,-1], [-1,-1,0]], dtype = int64)
+   
+   for kk in range(dims.z_size):
+      for jj in range(dims.y_size):
+         for ii in range(dims.x_size):
+            base_node = np.array((kk,jj,ii), dtype = int64)
+            shift_indices = get_index_njit(base_node, shift, dims)
+            cell_ids = 3*numba_ravel_multi_index(shift_indices,
+                                                 dims.dim_scalar)
+            
+            row = cell_ids[0]
+
+            cols[row*8 + 0] = cell_ids[5] + 1
+            cols[row*8 + 1] = cell_ids[1] + 1
+            cols[row*8 + 2] = cell_ids[1] + 2
+            cols[row*8 + 3] = cell_ids[3] + 2
+            cols[row*8 + 4] = cell_ids[4] + 1
+            cols[row*8 + 5] = cell_ids[0] + 1
+            cols[row*8 + 6] = cell_ids[0] + 2
+            cols[row*8 + 7] = cell_ids[2] + 2
+            
+            cols[row*8 + 8] = cell_ids[3] + 2
+            cols[row*8 + 9] = cell_ids[2] + 2
+            cols[row*8 + 10] = cell_ids[2] + 0
+            cols[row*8 + 11] = cell_ids[6] + 0
+            cols[row*8 + 12] = cell_ids[1] + 2
+            cols[row*8 + 13] = cell_ids[0] + 2
+            cols[row*8 + 14] = cell_ids[0] + 0
+            cols[row*8 + 15] = cell_ids[4] + 0
+
+            cols[row*8 + 16] = cell_ids[6] + 0
+            cols[row*8 + 17] = cell_ids[4] + 0
+            cols[row*8 + 18] = cell_ids[4] + 1
+            cols[row*8 + 19] = cell_ids[5] + 1
+            cols[row*8 + 20] = cell_ids[2] + 0
+            cols[row*8 + 21] = cell_ids[0] + 0
+            cols[row*8 + 22] = cell_ids[0] + 1
+            cols[row*8 + 23] = cell_ids[1] + 1
+
+   return data,rows,cols
+
+@ftools.lru_cache(maxsize = 128)
+@njit(cache = True)#, fastmath = True)
+def get_operator_coo_curl_node2face(dims):
+   # Returns the 3D curl operator for node2face data in matrix form
+   data = np.empty(3*8*dims.Ncells_total, dtype = float64)
+   cols = np.empty(3*8*dims.Ncells_total, dtype = int64)
+
+   sub_data = np.empty(3*8, dtype = float64)
+   sub_rows = np.empty(3*8, dtype = float64)
+   
+   sub_data[0] = 1/dims.dz
+   sub_data[1] = 1/dims.dz
+   sub_data[2] = 1/dims.dy
+   sub_data[3] = 1/dims.dy
+   sub_data[4:8] = -sub_data[0:4]
+
+   sub_data[8] = 1/dims.dx
+   sub_data[9] = 1/dims.dx
+   sub_data[10] = 1/dims.dz
+   sub_data[11] = 1/dims.dz
+   sub_data[12:16] = -sub_data[8:12]
+
+   sub_data[16] = 1/dims.dy
+   sub_data[17] = 1/dims.dy
+   sub_data[18] = 1/dims.dx
+   sub_data[19] = 1/dims.dx
+   sub_data[20:24] = -sub_data[16:20]
+
+   for ii in range(dims.Ncells_total):
+      data[24*ii:24*(ii+1)] = 0.5*sub_data
+
+   sub_rows = np.arange(3*dims.Ncells_total, dtype = int64)
+   rows = np.repeat(sub_rows, 8)
+   
+   shift = np.array([[0,0,0], [0,0,1], [0,1,0], [0,1,1],
+                     [1,0,0], [1,0,1], [1,1,0]], dtype = int64)
+   
+   for kk in range(dims.z_size):
+      for jj in range(dims.y_size):
+         for ii in range(dims.x_size):
+            base_node = np.array((kk,jj,ii), dtype = int64)
+            shift_indices = get_index_njit(base_node, shift, dims)
+            cell_ids = 3*numba_ravel_multi_index(shift_indices,
+                                                 dims.dim_scalar)
+
+            row = cell_ids[0]
+
+            # Note: Each is divided by dx,dy or dz as the line integral
+            # first multiplies by dx, dy or dz
+            # (whichever direction we are following)
+            # then we divide by the area of the surface
+            # which cancels this out and leaves the other dimension
+            
+            cols[row*8 + 0] = cell_ids[0] + 1
+            cols[row*8 + 1] = cell_ids[2] + 1
+            cols[row*8 + 2] = cell_ids[2] + 2
+            cols[row*8 + 3] = cell_ids[6] + 2
+            cols[row*8 + 4] = cell_ids[6] + 1
+            cols[row*8 + 5] = cell_ids[4] + 1
+            cols[row*8 + 6] = cell_ids[4] + 2
+            cols[row*8 + 7] = cell_ids[0] + 2
+            
+            cols[row*8 + 8] = cell_ids[0] + 2
+            cols[row*8 + 9] = cell_ids[4] + 2
+            cols[row*8 + 10] = cell_ids[4] + 0
+            cols[row*8 + 11] = cell_ids[5] + 0
+            cols[row*8 + 12] = cell_ids[5] + 2
+            cols[row*8 + 13] = cell_ids[1] + 2
+            cols[row*8 + 14] = cell_ids[1] + 0
+            cols[row*8 + 15] = cell_ids[0] + 0
+            
+            cols[row*8 + 16] = cell_ids[0] + 0
+            cols[row*8 + 17] = cell_ids[1] + 0
+            cols[row*8 + 18] = cell_ids[1] + 1
+            cols[row*8 + 19] = cell_ids[3] + 1
+            cols[row*8 + 20] = cell_ids[3] + 0
+            cols[row*8 + 21] = cell_ids[2] + 0
+            cols[row*8 + 22] = cell_ids[2] + 1
+            cols[row*8 + 23] = cell_ids[0] + 1
+            
+   return data,rows,cols

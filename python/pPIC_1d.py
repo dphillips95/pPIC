@@ -4,6 +4,7 @@ import math
 import numpy as np
 import scipy as sp
 import scipy.constants as const
+from scipy.sparse import coo_matrix
 from scipy.sparse.linalg import gmres
 from timeit import default_timer as timer
 import numba
@@ -18,8 +19,8 @@ import logging
 import types
 
 from indexers import split_axis,floatToStr,shift_indices,shift_indices_njit
-from interpolators import face2cell,face2node,face2r,cell2node,cell2face,cell2r,node2face,node2cell,node2r,div_face2cell,div_node2cell,curl_face2node,curl_node2face,face2cell_njit,face2node_njit,face2r_njit,cell2node_njit,cell2face_njit,cell2r_njit,node2face_njit,node2cell_njit,node2r_njit,div_face2cell_njit,div_node2cell_njit,curl_face2node_njit,curl_node2face_njit,face2cell_njit_alt,face2node_njit_alt,cell2node_njit_alt,cell2face_njit_alt,node2face_njit_alt,node2cell_njit_alt,div_face2cell_njit_alt,div_node2cell_njit_alt,curl_face2node_njit_alt,curl_node2face_njit_alt,get_operator_curl_face2node,get_operator_curl_node2face
-from populations import Pop,compute_alpha,moveParticles,Lorentz,compute_rotated_current,compute_mass_matrices,accumulators,calcNodeData,Pop_njit,compute_alpha_njit,moveParticles_njit,Lorentz_njit,compute_rotated_current_njit,compute_mass_matrices_njit
+from interpolators import face2cell,face2node,face2r,cell2node,cell2face,cell2r,node2face,node2cell,node2r,div_face2cell,div_node2cell,curl_face2node,curl_node2face,face2cell_njit,face2node_njit,face2r_njit,cell2node_njit,cell2face_njit,cell2r_njit,node2face_njit,node2cell_njit,node2r_njit,div_face2cell_njit,div_node2cell_njit,curl_face2node_njit,curl_node2face_njit,face2cell_njit_alt,face2node_njit_alt,cell2node_njit_alt,cell2face_njit_alt,node2face_njit_alt,node2cell_njit_alt,div_face2cell_njit_alt,div_node2cell_njit_alt,curl_face2node_njit_alt,curl_node2face_njit_alt,get_operator_curl_face2node,get_operator_curl_node2face,get_operator_coo_curl_face2node,get_operator_coo_curl_node2face
+from populations import Pop,compute_alpha,moveParticles,Lorentz,compute_rotated_current,compute_mass_matrices,accumulators,calcNodeData,Pop_njit,compute_alpha_njit,moveParticles_njit,Lorentz_njit,compute_rotated_current_njit,compute_mass_matrices_njit,compute_mass_matrices_alt,compute_mass_matrices_coo,compute_mass_matrices_coo_alt,compute_mass_matrices_coo_njit
 from fields import Fields,upwind_fields
 from output import save_data
 
@@ -391,9 +392,9 @@ def build_A(mass_matrices):
    # Construct sparse matrix A of Ax = b equation representing Maxwell's equations
    if dims.oneV:
       A = np.zeros((2*dims.Ncells_total,2*dims.Ncells_total))
-      # B-component of Faraday's law
+      # B-component of Faraday's Law
       A[:dims.Ncells_total,:dims.Ncells_total] = np.identity(dims.Ncells_total)
-      # E-component of Faraday's law not present due to 1V
+      # E-component of Faraday's Law not present due to 1V
 
       # B-component of Ampère's Law not present due to 1V
 
@@ -402,9 +403,9 @@ def build_A(mass_matrices):
       A[dims.Ncells_total:,dims.Ncells_total:] += dims.dt*dims.theta*mass_matrices[0,0]/const.epsilon_0
    else:
       A = np.zeros((6*dims.Ncells_total,6*dims.Ncells_total))
-      # B-component of Faraday's law
+      # B-component of Faraday's Law
       A[:3*dims.Ncells_total,:3*dims.Ncells_total] = np.identity(3*dims.Ncells_total)
-      # E-component of Faraday's law
+      # E-component of Faraday's Law
       A[:3*dims.Ncells_total,3*dims.Ncells_total:] = get_operator_curl_node2face(dims)*dims.dt*dims.theta
 
       # B-component of Ampère's Law
@@ -413,7 +414,7 @@ def build_A(mass_matrices):
       # E-component of Ampère's Law
       A[3*dims.Ncells_total:,3*dims.Ncells_total:] = np.identity(3*dims.Ncells_total)
 
-      mass = mass_matrices.transpose((2,1,3,0)).flatten().reshape(3*dims.Ncells_total,3*dims.Ncells_total)
+      mass = mass_matrices.transpose((2,1,3,0)).reshape(3*dims.Ncells_total,3*dims.Ncells_total)
       
       A[3*dims.Ncells_total:,3*dims.Ncells_total:] += dims.dt*dims.theta*mass/const.epsilon_0
    return A
@@ -475,7 +476,88 @@ def build_b(faceB, nodeE, nodeJ_hat, mass_matrices):
       b[3*dims.Ncells_total:] += (curl_face2node(faceB, dims)*const.c**2*dims.dt*(1-dims.theta)).flat
    
    return b
-            
+
+def build_A_coo(mass_matrices):
+   # Construct sparse coo matrix A of Ax = b equation representing Maxwell's equations
+   if dims.oneV:
+      block_shape = (dims.Ncells_total,dims.Ncells_total)
+      # B-component of Faraday's Law
+      FaradayB = sp.sparse.identity(dims.Ncells_total, dtype = np.float64, format = 'coo')
+
+      # E-component of Faraday's Law
+      FaradayE = sp.sparse.coo_matrix((dims.Ncells_total,dims.Ncells_total), dtype = np.float64)
+
+      # B-component of Ampère's Law
+      AmpereB = sp.sparse.coo_matrix((dims.Ncells_total,dims.Ncells_total), dtype = np.float64)
+
+      # E-component of Ampère's Law
+      AmpereE = sp.sparse.identity(dims.Ncells_total, dtype = np.float64, format = 'coo')
+      
+      AmpereE += dims.dt*dims.theta*mass_matrices[0,0]/const.epsilon_0
+   else:
+      block_shape = (3*dims.Ncells_total,3*dims.Ncells_total)
+      
+      # B-component of Faraday's Law
+      FaradayB = sp.sparse.identity(3*dims.Ncells_total, dtype = np.float64, format = 'coo')
+      
+      # E-component of Faraday's Law
+      data,rows,cols = get_operator_coo_curl_node2face(dims)
+      FaradayE = coo_matrix((data,(rows,cols)), shape = block_shape)*dims.dt*dims.theta
+      FaradayE.sum_duplicates()
+      
+      # B-component of Ampère's Law
+      data,rows,cols = get_operator_coo_curl_face2node(dims)
+      AmpereB = -coo_matrix((data,(rows,cols)), shape = block_shape)*dims.dt*dims.theta*const.c**2
+      AmpereB.sum_duplicates()
+
+      # E-component of Ampère's Law
+      AmpereE = sp.sparse.identity(3*dims.Ncells_total, dtype = np.float64, format = 'coo')
+
+      AmpereE += dims.dt*dims.theta*mass_matrices/const.epsilon_0
+
+      AmpereE.sum_duplicates()
+
+   Faraday = sp.sparse.hstack((FaradayB,FaradayE))
+   Ampere = sp.sparse.hstack((AmpereB,AmpereE))
+   A = sp.sparse.vstack((Faraday,Ampere))
+      
+   return A
+
+def build_b_coo(faceB, nodeE, nodeJ_hat, mass_matrices):
+   # Construct constant vector b of Ax = b equation representing Maxwell's equations
+   if dims.oneV:
+      Ex = nodeE[:,:,:,0].flatten()
+
+      Jx = nodeJ_hat[:,:,:,0].flatten()
+      Jx += (1 - dims.theta)*mass_matrices[0,0]@Ex
+      
+      b = np.zeros(2*dims.Ncells_total)
+      # Constant term of Faraday's Law
+      b[:dims.Ncells_total] += faceB[:,:,:,0].flat
+
+      # Constant term of Ampère's Law
+      b[dims.Ncells_total:] += Ex-dims.dt*Jx/const.epsilon_0
+   else:
+      E_split = split_axis(nodeE, axis = 3)
+      
+      J_mod = (1 - dims.theta)*mass_matrices@nodeE.flat
+      
+      b = np.zeros(6*dims.Ncells_total)
+      
+      J_star = nodeJ_hat.copy().flatten()
+      J_star += J_mod
+      
+      # Constant term of Faraday's Law
+      b[:3*dims.Ncells_total] += faceB.flat
+      b[:3*dims.Ncells_total] -= (curl_node2face(nodeE, dims)*dims.dt*(1-dims.theta)).flat
+      
+      # Constant term of Ampère's Law
+      b[3*dims.Ncells_total:] += nodeE.flat
+      b[3*dims.Ncells_total:] -= dims.dt*J_star/const.epsilon_0
+      b[3*dims.Ncells_total:] += (curl_face2node(faceB, dims)*const.c**2*dims.dt*(1-dims.theta)).flat
+   
+   return b
+
 def test_interpolators(function = None):
    # Test interpolation methods
    print("Testing interpolators")
@@ -633,17 +715,23 @@ def test_interpolators(function = None):
             curl_f2n_njit_alt = curl_face2node_njit_alt(face, dims)
             operator = get_operator_curl_face2node(dims)
             curl_f2n_op = (operator@face.flat).reshape(dims.dim_vector)
+            data,rows,cols = get_operator_coo_curl_face2node(dims)
+            operator_coo = coo_matrix((data,(rows,cols)), shape = (3*dims.Ncells_total,3*dims.Ncells_total))
+            curl_f2n_op_coo = (operator_coo@face.flat).reshape(dims.dim_vector)
             compare("curl_face2node:   ",
-                    (curl_f2n,curl_f2n_njit,curl_f2n_njit_alt,curl_f2n_op))
+                    (curl_f2n,curl_f2n_njit,curl_f2n_njit_alt,curl_f2n_op,curl_f2n_op_coo))
          elif func == "curl_node2face":
             curl_n2f = curl_node2face(node, dims)
             curl_n2f_njit = curl_node2face_njit(node, dims)
             curl_n2f_njit_alt = curl_node2face_njit_alt(node, dims)
             operator = get_operator_curl_node2face(dims)
             curl_n2f_op = (operator@node.flat).reshape(dims.dim_vector)
+            data,rows,cols = get_operator_coo_curl_node2face(dims)
+            operator_coo = coo_matrix((data,(rows,cols)), shape = (3*dims.Ncells_total,3*dims.Ncells_total))
+            curl_n2f_op_coo = (operator_coo@node.flat).reshape(dims.dim_vector)
             compare("curl_node2face:   ",
-                    (curl_n2f,curl_n2f_njit,curl_n2f_njit_alt,curl_n2f_op))
-            
+                    (curl_n2f,curl_n2f_njit,curl_n2f_njit_alt,curl_n2f_op,curl_n2f_op_coo))
+   
    print("")
    
    interp_timers = my_timers()
@@ -970,6 +1058,8 @@ period = (z_periodic, y_periodic, x_periodic, True)
 
 dims = Dims(lims, dt, theta, phi, sizes, period, not config.getboolean("main", "use_nonlinear_r_interpolation", fallback = False), oneV)
 
+save_steps = config.getint("simulation", "save_steps", fallback = 1)
+
 if args.test is not None:
    test_interpolators(args.test)
 
@@ -1034,7 +1124,7 @@ if __name__ == '__main__':
    if os.path.isfile(args.out_dir + "/fields.h5") or os.path.isfile(args.out_dir + "/pops.h5") or os.path.isfile(args.out_dir + "/logs.h5" or os.path.isfile(args.out_dir + "/logfile.txt")):
       print("Output file(s) already exist, aborting")
       sys.exit()
-   
+
    save_data(args.out_dir, fields, pops, dims)
    
    tolerance_error = False
@@ -1075,15 +1165,40 @@ if __name__ == '__main__':
       timers.tic("mass matrices")
 
       logger.info("Computing mass matrices")
-      if dims.oneV:
-         mass_matrices = np.zeros((1,1,dims.Ncells_total,dims.Ncells_total))
-      else:
-         mass_matrices = np.zeros((3,3,dims.Ncells_total,dims.Ncells_total))
-
+      # if dims.oneV:
+      #    mass_matrices = np.zeros((1,1,dims.Ncells_total,dims.Ncells_total))
+      # else:
+      #    mass_matrices = np.zeros((3,3,dims.Ncells_total,dims.Ncells_total))
+      # 
+      # for pop in pops.values():
+      #    if pop.static is False:
+      #       mass_matrices += compute_mass_matrices_njit(
+      #          pop.r, pop.alpha, pop.m, pop.q, pop.w, dims)
+      
+      data_M = []
+      rows_M = []
+      cols_M = []
+      
       for pop in pops.values():
          if pop.static is False:
-            mass_matrices += compute_mass_matrices_njit(
-               pop.r, pop.alpha, pop.m, pop.q, pop.w, dims)
+            dat,row,col = compute_mass_matrices_coo(pop, dims)
+            data_M.append(dat)
+            rows_M.append(row)
+            cols_M.append(col)
+      
+      data_M = np.concatenate(data_M, axis = -1)
+      rows_M = np.concatenate(rows_M)
+      cols_M = np.concatenate(cols_M)
+
+      if dims.oneV:
+         mass_matrices_coo = np.empty((1,1), dtype = 'object')
+         mass_matrices_coo[0,0] = coo_matrix(
+            (data_M[0,0],(rows_M,cols_M)),
+            shape = (dims.Ncells_total,dims.Ncells_total))
+         mass_matrices_coo[0,0].sum_duplicates()
+      else:
+         mass_matrices_coo = coo_matrix((data_M,(rows_M,cols_M)))
+         mass_matrices_coo.sum_duplicates()
       
       timers.toc("mass matrices")
       timers.tic("maxwell")
@@ -1092,12 +1207,14 @@ if __name__ == '__main__':
 
       timers.tic("build b")
       
-      b = build_b(fields.faceB, fields.nodeE, nodeJ_hat, mass_matrices)
+      # b = build_b(fields.faceB, fields.nodeE, nodeJ_hat, mass_matrices)
+      b_coo = build_b_coo(fields.faceB, fields.nodeE, nodeJ_hat, mass_matrices_coo)
       
       timers.toc("build b")
       timers.tic("build A")
       
-      A = build_A(mass_matrices)
+      # A = build_A(mass_matrices)
+      A_coo = build_A_coo(mass_matrices_coo)
       
       timers.toc("build A")
       timers.tic("gmres")
@@ -1113,7 +1230,7 @@ if __name__ == '__main__':
       
       while info > 0 and rtol < 1e-2 and atol < 1e-2:
          
-         xnext,info = gmres(A, b, rtol = rtol, atol = atol, x0 = x0)
+         xnext,info = gmres(A_coo, b_coo, rtol = rtol, atol = atol, x0 = x0)
          if info > 0:
             logger.info("GMRES tolerance failure on step " + str(jj) + ", reducing tolerance")
             if not tolerance_error:
@@ -1156,24 +1273,42 @@ if __name__ == '__main__':
             # pop.v = Lorentz_njit(pop.r, pop.v, pop.alpha, pop.q, pop.m, midNodeE, dims)
 
       timers.toc("lorentz")
-      timers.tic("extra")
-
-      for pop in pops.values():
-         accumulators(pop, dims)
-         calcNodeData(pop, dims)
-      # fields.update_fields(pops, dims)
-
-      timers.toc("extra")
 
       # Increment time
       dims.step_time()
 
-      timers.tic("output")
+      if (jj+1)%save_steps == 0:
+         timers.tic("extra")
+         
+         for pop in pops.values():
+            accumulators(pop, dims)
+            calcNodeData(pop, dims)
+         fields.update_fields(pops, dims)
+         
+         timers.toc("extra")
+         timers.tic("output")
+         
+         save_data(args.out_dir, fields, pops, dims)
+         
+         timers.toc("output")
 
-      save_data(args.out_dir, fields, pops, dims)
-
-      timers.toc("output")
-
+   logger.newline()
+   logger.info("Saving final state")
+         
+   timers.tic("extra")
+   
+   for pop in pops.values():
+      accumulators(pop, dims)
+      calcNodeData(pop, dims)
+   fields.update_fields(pops, dims)
+   
+   timers.toc("extra")
+   timers.tic("output")
+   
+   save_data(args.out_dir, fields, pops, dims)
+   
+   timers.toc("output")
+         
    timers.toc("total")
 
    logger.newline()
