@@ -487,27 +487,28 @@ def compute_mass_matrices_alt(pop, dims):
 def compute_mass_matrices_coo(pop, dims):
    # Compute mass matrices
    if dims.oneV:
-      data_M = np.empty((1,1,64*pop.Np), dtype = np.float64)
-      rows_M = np.empty((1,1,64*pop.Np), dtype = np.int64)
-      cols_M = np.empty((1,1,64*pop.Np), dtype = np.int64)
+      data_M = np.empty((64*pop.Np), dtype = np.float64)
+      rows_M = np.empty((64*pop.Np), dtype = np.int64)
+      cols_M = np.empty((64*pop.Np), dtype = np.int64)
       
-      alpha = pop.alpha[:,0,0].reshape(1,1,1,-1)
+      alpha = pop.alpha[:,0,0][np.newaxis,:,np.newaxis,np.newaxis]
    else:
       data_M = np.empty((3*3*64*pop.Np), dtype = np.float64)
       rows_M = np.empty((3*3*64*pop.Np), dtype = np.int64)
       cols_M = np.empty((3*3*64*pop.Np), dtype = np.int64)
 
-      alpha = pop.alpha
+      alpha = pop.alpha[np.newaxis,...]
    
    (x_ind,y_ind,z_ind),(x_w,y_w,z_w) = CIC_weights_node(pop.r, dims, False)
    
    if dims.oneV is True:
-      x_w = x_w.reshape(1,1,2,-1)
+      x_w = x_w.reshape(2,-1)
 
-      x_wi = np.repeat(x_w, 2, axis = 2)
-      x_wj = np.tile(x_w, (1,1,2,1))
+      x_wi = np.repeat(x_w, 2, axis = 0)
+      x_wj = np.tile(x_w, (2,1))
       
-      data_M = (x_wi*x_wj*alpha).reshape(1,1,-1)
+      data_M = ((x_wi*x_wj)[:,:,np.newaxis,np.newaxis]*alpha).flatten()
+      
       rows_M = np.repeat(x_ind, 2, axis = 0).flatten()
       cols_M = np.tile(x_ind, (2,1)).flatten()
    else:
@@ -525,7 +526,7 @@ def compute_mass_matrices_coo(pop, dims):
       z_wi = np.tile(np.repeat(z_w, 2, axis = 0), (16,1))
       z_wj = np.tile(z_w, (32,1))
       
-      data_M = ((x_wi*x_wj*y_wi*y_wj*z_wi*z_wj)[:,:,np.newaxis,np.newaxis]*alpha[np.newaxis,...]).flatten()
+      data_M = ((x_wi*x_wj*y_wi*y_wj*z_wi*z_wj)[:,:,np.newaxis,np.newaxis]*alpha).flatten()
       
       xi = np.repeat(x_ind, 32, axis = 0).flatten()
       xj = np.tile(np.repeat(x_ind, 16, axis = 0), (2,1)).flatten()

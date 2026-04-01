@@ -485,7 +485,6 @@ def build_b(faceB, nodeE, nodeJ_hat, mass_matrices):
 def build_A_coo(mass_matrices):
    # Construct sparse coo matrix A of Ax = b equation representing Maxwell's equations
    if dims.oneV:
-      block_shape = (dims.Ncells_total,dims.Ncells_total)
       # B-component of Faraday's Law
       FaradayB = sp.sparse.identity(dims.Ncells_total, dtype = np.float64, format = 'coo')
 
@@ -498,7 +497,7 @@ def build_A_coo(mass_matrices):
       # E-component of Ampère's Law
       AmpereE = sp.sparse.identity(dims.Ncells_total, dtype = np.float64, format = 'coo')
       
-      AmpereE += dims.dt*dims.theta*mass_matrices[0,0]/const.epsilon_0
+      AmpereE += dims.dt*dims.theta*mass_matrices/const.epsilon_0
    else:
       block_shape = (3*dims.Ncells_total,3*dims.Ncells_total)
       
@@ -531,26 +530,25 @@ def build_A_coo(mass_matrices):
 def build_b_coo(faceB, nodeE, nodeJ_hat, mass_matrices):
    # Construct constant vector b of Ax = b equation representing Maxwell's equations
    if dims.oneV:
-      Ex = nodeE[:,:,:,0].flatten()
-
-      Jx = nodeJ_hat[:,:,:,0].flatten()
-      Jx += (1 - dims.theta)*mass_matrices[0,0]@Ex
-      
       b = np.zeros(2*dims.Ncells_total)
+      
+      Ex = nodeE[:,:,:,0].flat
+      
+      J_star = (1 - dims.theta)*mass_matrices@Ex
+      
+      J_star += nodeJ_hat[:,:,:,0].flat
+      
       # Constant term of Faraday's Law
       b[:dims.Ncells_total] += faceB[:,:,:,0].flat
 
       # Constant term of Ampère's Law
-      b[dims.Ncells_total:] += Ex-dims.dt*Jx/const.epsilon_0
+      b[dims.Ncells_total:] += Ex-dims.dt*J_star/const.epsilon_0
    else:
-      E_split = split_axis(nodeE, axis = 3)
-      
-      J_mod = (1 - dims.theta)*mass_matrices@nodeE.flat
-      
       b = np.zeros(6*dims.Ncells_total)
       
-      J_star = nodeJ_hat.copy().flatten()
-      J_star += J_mod
+      J_star = (1 - dims.theta)*mass_matrices@nodeE.flat
+      
+      J_star += nodeJ_hat.flat
       
       # Constant term of Faraday's Law
       b[:3*dims.Ncells_total] += faceB.flat
@@ -1191,19 +1189,18 @@ if __name__ == '__main__':
             rows_M.append(row)
             cols_M.append(col)
       
-      data_M = np.concatenate(data_M, axis = -1)
+      data_M = np.concatenate(data_M)
       rows_M = np.concatenate(rows_M)
       cols_M = np.concatenate(cols_M)
 
-      if dims.oneV:
-         mass_matrices_coo = np.empty((1,1), dtype = 'object')
-         mass_matrices_coo[0,0] = coo_matrix(
-            (data_M[0,0],(rows_M,cols_M)),
-            shape = (dims.Ncells_total,dims.Ncells_total))
-         mass_matrices_coo[0,0].sum_duplicates()
+      if oneV:
+         block_shape = (dims.Ncells_total,dims.Ncells_total)
       else:
-         mass_matrices_coo = coo_matrix((data_M,(rows_M,cols_M)))
-         mass_matrices_coo.sum_duplicates()
+         block_shape = (3*dims.Ncells_total,3*dims.Ncells_total)
+      
+      mass_matrices_coo = coo_matrix((data_M,(rows_M,cols_M)),
+                                     shape = block_shape)
+      mass_matrices_coo.sum_duplicates()
       
       timers.toc("mass matrices")
       timers.tic("maxwell")
