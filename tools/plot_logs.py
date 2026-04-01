@@ -123,7 +123,6 @@ def find_tickStep(maxCrdRange, min_ticks = 5, max_ticks = 15, bias = 'min'):
 def plotFigure(t_data, var_data, var_label, unit = None, rescale_x = True, rescale_y = False, log = False):
    # Generate single dataset figure
    fig = Figure(figsize = figureSize, frameon = True, layout = "compressed")
-
    ax = fig.subplots(nrows = 1, ncols = 1, squeeze = False)[0,0]
    
    xRange = np.array((np.min(t_data).item(),np.max(t_data).item()))
@@ -135,7 +134,7 @@ def plotFigure(t_data, var_data, var_label, unit = None, rescale_x = True, resca
    if any(np.isnan(yRange)) or all(np.abs(yRange) == 0):
       yRange[0] = -0.05
       yRange[1] = 0.05
-   elif np.max(np.abs(yRange)) == np.min(np.abs(yRange)):
+   elif np.max(np.abs(yRange)) - np.min(np.abs(yRange)) < 1e-8*np.max(np.abs(yRange)):
       mid = np.mean(yRange)
       if mid == 0:
          diff = 0.05
@@ -311,7 +310,7 @@ else:
 
 var_list = logs.keys()
 pop_list = (x[:-13] for x in var_list if x.endswith("_avgCellU_mag"))
-      
+
 figs = []
 for fig_name in fig_list:
    if fig_name == "avgFaceBx":
