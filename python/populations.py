@@ -8,7 +8,7 @@ from numba import njit,int64,float64,guvectorize
 from numba.experimental import jitclass
 
 from interpolators import face2r,cell2r,node2r,face2r_njit,cell2r_njit,node2r_njit
-from indexers import split_axis,numba_unravel_index,CIC_weights_node,CIC_weights_cell,numba_clip
+from indexers import split_axis,numba_unravel_index,CIC_weights_node,CIC_weights_cell,numba_clip,CIC_weights_node_njit,CIC_weights_cell_njit,get_particle_cellid_njit,get_index_njit
 
 class Pop:
    # Contents:
@@ -487,21 +487,76 @@ def compute_mass_matrices_alt(pop, dims):
 def compute_mass_matrices_coo(pop, dims):
    # Compute mass matrices
    if dims.oneV:
-      data_M = np.empty((64*pop.Np), dtype = np.float64)
-      rows_M = np.empty((64*pop.Np), dtype = np.int64)
-      cols_M = np.empty((64*pop.Np), dtype = np.int64)
+      data_M = np.empty((4,pop.Np), dtype = np.float64)
+      rows_M = np.empty((4,pop.Np), dtype = np.int64)
+      cols_M = np.empty((4,pop.Np), dtype = np.int64)
       
       alpha = pop.alpha[:,0,0][np.newaxis,:,np.newaxis,np.newaxis]
    else:
-      data_M = np.empty((3*3*64*pop.Np), dtype = np.float64)
-      rows_M = np.empty((3*3*64*pop.Np), dtype = np.int64)
-      cols_M = np.empty((3*3*64*pop.Np), dtype = np.int64)
+      data_M = np.empty((64,3*3*pop.Np), dtype = np.float64)
+      rows_M = np.empty((64,3*3*pop.Np), dtype = np.int64)
+      cols_M = np.empty((64,3*3*pop.Np), dtype = np.int64)
 
       alpha = pop.alpha[np.newaxis,...]
    
    (x_ind,y_ind,z_ind),(x_w,y_w,z_w) = CIC_weights_node(pop.r, dims, False)
    
    if dims.oneV is True:
+      for jj,(xi,x_wi) in enumerate(zip(x_ind,x_w)):
+         for ii,(xj,x_wj) in enumerate(zip(x_ind,x_w)):
+            ind = jj*2 + ii
+            
+            data_M[ind] = (x_wi*x_wj * alpha).flat
+            
+            rows_M[ind] = xi
+            cols_M[ind] = xj
+   else:
+      x_w = x_w.reshape(2,-1,1,1)
+      y_w = y_w.reshape(2,-1,1,1)
+      z_w = z_w.reshape(2,-1,1,1)
+
+      x_ind *= 3
+      y_ind *= 3*dims.x_size
+      z_ind *= 3*dims.x_size*dims.y_size
+      
+      for nn,(xi,x_wi) in enumerate(zip(x_ind,x_w)):
+         for mm,(xj,x_wj) in enumerate(zip(x_ind,x_w)):
+            for ll,(yi,y_wi) in enumerate(zip(y_ind,y_w)):
+               for kk,(yj,y_wj) in enumerate(zip(y_ind,y_w)):
+                  for jj,(zi,z_wi) in enumerate(zip(z_ind,z_w)):
+                     for ii,(zj,z_wj) in enumerate(zip(z_ind,z_w)):
+                        ind = ((((nn*2 + mm)*2 + ll)*2 + kk)*2 + jj)*2 + ii
+                        
+                        data_M[ind] = (x_wi*x_wj*y_wi*y_wj*z_wi*z_wj * alpha).flat
+                        
+                        row = zi + yi + xi
+                        col = zj + yj + xj
+
+                        row = (row[:,np.newaxis] + np.arange(3)[np.newaxis]).flat
+                        row = np.repeat(row, 3)
+                        
+                        col = np.repeat(col, 3)
+                        col = (col[:,np.newaxis] + np.arange(3)[np.newaxis]).flat
+                        
+                        rows_M[ind] = row
+                        cols_M[ind] = col
+
+   data_M = data_M.flatten()
+   rows_M = data_M.flatten()
+   cols_M = data_M.flatten()
+   
+   beta = dims.phi*(pop.q*dims.dt)/pop.m
+   data_M *= beta * pop.q*pop.w/dims.dV
+   
+   return data_M,rows_M,cols_M
+
+def compute_mass_matrices_coo_alt(pop, dims):
+   # Compute mass matrices
+   (x_ind,y_ind,z_ind),(x_w,y_w,z_w) = CIC_weights_node(pop.r, dims, False)
+   
+   if dims.oneV is True:
+      alpha = pop.alpha[:,0,0][np.newaxis,:,np.newaxis,np.newaxis]
+      
       x_w = x_w.reshape(2,-1)
 
       x_wi = np.repeat(x_w, 2, axis = 0)
@@ -512,21 +567,30 @@ def compute_mass_matrices_coo(pop, dims):
       rows_M = np.repeat(x_ind, 2, axis = 0).flatten()
       cols_M = np.tile(x_ind, (2,1)).flatten()
    else:
-      x_w = x_w.reshape(2,-1)
-      y_w = y_w.reshape(2,-1)
-      z_w = z_w.reshape(2,-1)
+      alpha = pop.alpha[np.newaxis,...]
+      
+      x_w = x_w.reshape(2,-1,1,1)
+      y_w = y_w.reshape(2,-1,1,1)
+      z_w = z_w.reshape(2,-1,1,1)
       
       y_ind *= dims.x_size
       z_ind *= dims.x_size*dims.y_size
-
-      x_wi = np.repeat(x_w, 32, axis = 0)
-      x_wj = np.tile(np.repeat(x_w, 16, axis = 0), (2,1))
-      y_wi = np.tile(np.repeat(y_w, 8, axis = 0), (4,1))
-      y_wj = np.tile(np.repeat(y_w, 4, axis = 0), (8,1))
-      z_wi = np.tile(np.repeat(z_w, 2, axis = 0), (16,1))
-      z_wj = np.tile(z_w, (32,1))
       
-      data_M = ((x_wi*x_wj*y_wi*y_wj*z_wi*z_wj)[:,:,np.newaxis,np.newaxis]*alpha).flatten()
+      x_wi = np.repeat(x_w, 2, axis = 0)
+      x_wj = np.tile(x_w, (2,1,1,1))
+      x_wij = x_wi*x_wj
+
+      y_wi = np.repeat(y_w, 2, axis = 0)
+      y_wj = np.tile(y_w, (2,1,1,1))
+      y_wij = y_wi*y_wj
+
+      z_wi = np.repeat(z_w, 2, axis = 0)
+      z_wj = np.tile(z_w, (2,1,1,1))
+      z_wij = z_wi*z_wj
+
+      xyz_w = np.repeat(x_wij, 16, axis = 0) * np.tile(np.repeat(y_wij, 4, axis = 0), (4,1,1,1)) * np.tile(z_wij, (16,1,1,1))      
+      
+      data_M = (xyz_w*alpha).flatten()
       
       xi = np.repeat(x_ind, 32, axis = 0).flatten()
       xj = np.tile(np.repeat(x_ind, 16, axis = 0), (2,1)).flatten()
@@ -551,77 +615,6 @@ def compute_mass_matrices_coo(pop, dims):
    data_M *= beta * pop.q*pop.w/dims.dV
    
    return data_M,rows_M,cols_M
-
-def compute_mass_matrices_coo_alt(pop, dims):
-   # Compute mass matrices
-   if dims.oneV:
-      M = np.zeros((dims.Ncells_total,dims.Ncells_total,1,1))
-      alpha = pop.alpha[:,0,0].reshape(-1,1,1)
-   else:
-      M = np.zeros((dims.Ncells_total,dims.Ncells_total,3,3))
-      # alpha = np.transpose(pop.alpha, (1,2,0))
-   
-   (x_ind,y_ind,z_ind),(x_w,y_w,z_w) = CIC_weights_node(pop.r, dims, False)
-   
-   if dims.oneV is True:
-      # x_w_outer = np.empty((pop.Np,2,2))
-      # gu_outer(x_w, x_w, x_w_outer)
-      x_w = x_w.reshape(2,-1,1,1)
-      
-      for xi,x_wi in zip(x_ind,x_w):
-         for xj,x_wj in zip(x_ind,x_w):
-            np.add.at(M, (xi,xj), x_wi*x_wj*alpha)
-   else:
-      # y_w = np.hstack((y_w0[:,np.newaxis],y_w1[:,np.newaxis]))
-      # z_w = np.hstack((z_w0[:,np.newaxis],z_w1[:,np.newaxis]))
-
-      # x_w_outer = np.empty((pop.Np,2,2))
-      # y_w_outer = x_w_outer.copy()
-      # z_w_outer = x_w_outer.copy()
-      # gu_outer(x_w, x_w, x_w_outer)
-      # gu_outer(y_w, y_w, y_w_outer)
-      # gu_outer(z_w, z_w, z_w_outer)
-
-      # x_w = np.stack((x_w0,x_w1)).reshape(1,1,2,-1)
-      # y_w = np.stack((y_w0,y_w1)).reshape(1,2,1,-1)
-      # z_w = np.stack((z_w0,z_w1)).reshape(2,1,1,-1)
-      # w = z_w*y_w*x_w
-
-      # ww = w[np.newaxis,np.newaxis,np.newaxis,...]*w[:,:,:,np.newaxis,np.newaxis,np.newaxis,...]
-
-      # ind_sub_x = (z_ind0*dims.y_size + y_ind0)*dims.x_size + x_ind0
-      # ind_sub_y = (z_ind0*dims.y_size + y_ind0)*dims.x_size + x_ind0
-
-      # w_sub = (x_w0*x_w0*y_w0*y_w0*z_w0*z_w0)[-1,np.newaxis,np.newaxis] * alpha
-      
-      x_w = x_w.reshape(2,-1,1,1)
-      y_w = y_w.reshape(2,-1,1,1)
-      z_w = z_w.reshape(2,-1,1,1)
-      
-      for xi,x_wi in zip(x_ind,x_w):
-         for xj,x_wj in zip(x_ind,x_w):
-            for yi,y_wi in zip(y_ind,y_w):
-               for yj,y_wj in zip(y_ind,y_w):
-                  for zi,z_wi in zip(z_ind,z_w):
-                     for zj,z_wj in zip(z_ind,z_w):
-                        rows = np.ravel_multi_index((zi,yi,xi),
-                                                    (dims.z_size,
-                                                     dims.y_size,
-                                                     dims.x_size))
-
-                        cols = np.ravel_multi_index((zj,yj,xj),
-                                                    (dims.z_size,
-                                                     dims.y_size,
-                                                     dims.x_size))
-                        
-                        np.add.at(M, (rows,cols),
-                                  (x_wi*x_wj*y_wi*y_wj*z_wi*z_wj) * pop.alpha)
-   M = np.transpose(M, (2,3,0,1))
-   
-   beta = dims.phi*(pop.q*dims.dt)/pop.m
-   M *= beta * pop.q*pop.w/dims.dV
-   
-   return M
 
 Pop_spec = [
    ("q", float64),
@@ -1199,80 +1192,181 @@ def compute_mass_matrices_njit(pop_r, pop_alpha, m, q, w, dims):
    return M
 
 @njit(cache = True, fastmath = True)
+def compute_mass_matrices_coo_njit_alt(pop_r, pop_alpha, m, q, w, dims):
+   # Compute mass matrices as coo matrices
+   Np = pop_r.shape[0]
+
+   if dims.oneV:
+      data_M = np.empty((Np,4,1), dtype = np.float64)
+      rows_M = np.empty((Np,4,1), dtype = np.int64)
+      cols_M = np.empty((Np,4,1), dtype = np.int64)
+   else:
+      data_M = np.empty((dims.Ncells_total,64,3,3), dtype = np.float64)
+      rows_M = np.empty((dims.Ncells_total,64,3,3), dtype = np.int64)
+      cols_M = np.empty((dims.Ncells_total,64,3,3), dtype = np.int64)
+   
+   for pp in range(Np):
+      breakpoint()
+      r = pop_r[pp]
+      index,weights = CIC_weights_node_njit(r, dims)
+      if dims.oneV:
+         alpha = pop_alpha[pp,0,0]
+         
+         for jj in range(2):
+            xi = index[0,jj]
+            x_wi = weights[0,jj]
+            for ii in range(2):
+               xj = index[0,ii]
+               x_wj = weights[0,ii]
+               
+               ind = jj*2 + ii
+
+               data_M[pp,ind] = x_wi*x_wj * alpha
+               
+               rows_M[pp,ind] = xi
+               cols_M[pp,ind] = xj
+      else:
+         alpha = pop_alpha[pp].flatten()
+         
+         x_ind = index[0]*3
+         y_ind = index[1]*3*dims.x_size
+         z_ind = index[2]*3*dims.x_size*dims.y_size
+         
+         for nn in range(2):
+            xi = x_ind[nn]
+            x_wi = weights[0][nn]
+            for mm in range(2):
+               xj = x_ind[mm]
+               x_wj = weights[0][mm]
+               for ll in range(2):
+                  yi = y_ind[ll]
+                  y_wi = weights[1][ll]
+                  for kk in range(2):
+                     yj = y_ind[kk]
+                     y_wj = weights[1][kk]
+                     for jj in range(2):
+                        zi = z_ind[jj]
+                        z_wi = weights[2][jj]
+                        for ii in range(2):
+                           zj = z_ind[ii]
+                           z_wj = weights[2][ii]
+                           
+                           ind = ((((nn*2 + mm)*2 + ll)*2 + kk)*2 + jj)*2 + ii
+                           
+                           data_M[pp,ind] = x_wi*x_wj*y_wi*y_wj*z_wi*z_wj * alpha
+                           
+                           row = zi + yi + xi
+                           col = zj + yj + xj
+
+                           rows_M[pp,ind] = np.array(
+                              [row+0,row+0,row+0,
+                               row+1,row+1,row+1,
+                               row+2,row+2,row+2])
+                           
+                           cols_M[pp,ind] = np.array(
+                              [col+0,col+1,col+2,
+                               col+0,col+1,col+2,
+                               col+0,col+1,col+2])
+         
+   data_M = data_M.flatten()
+   rows_M = rows_M.flatten()
+   cols_M = cols_M.flatten()
+                           
+   beta = dims.phi*(q*dims.dt)/m
+   data_M *= beta * q*w/dims.dV
+
+   return data_M,rows_M,cols_M
+
+@njit(cache = True, fastmath = True)
 def compute_mass_matrices_coo_njit(pop_r, pop_alpha, m, q, w, dims):
    # Compute mass matrices as coo matrices
+   Np = pop_r.shape[0]
+
    if dims.oneV:
-      M = np.zeros((1,1,dims.Ncells_total,dims.Ncells_total))
+      data_M = np.zeros((dims.Ncells_total,2,2,1,1), dtype = np.float64)
+      rows_M = np.empty((dims.Ncells_total,2,2,1,1), dtype = np.int64)
+      cols_M = np.empty((dims.Ncells_total,2,2,1,1), dtype = np.int64)
    else:
-      M = np.zeros((3,3,dims.Ncells_total,dims.Ncells_total))
+      data_M = np.zeros((dims.Ncells_total,8,8,3,3), dtype = np.float64)
+      rows_M = np.empty((dims.Ncells_total,8,8,3,3), dtype = np.int64)
+      cols_M = np.empty((dims.Ncells_total,8,8,3,3), dtype = np.int64)
 
-   for r,alpha in zip(pop_r,pop_alpha):
-      x_locs = math.floor((r[0] - dims.x_min)/dims.dx)
-      y_locs = math.floor((r[1] - dims.y_min)/dims.dy)
-      z_locs = math.floor((r[2] - dims.z_min)/dims.dz)
-
-      x0 = x_locs*dims.dx + dims.x_min
-      y0 = y_locs*dims.dy + dims.y_min
-      z0 = z_locs*dims.dz + dims.z_min
-
-      x_w1 = (r[0] - x0)/dims.dx
-      y_w1 = (r[1] - y0)/dims.dy
-      z_w1 = (r[2] - z0)/dims.dz
-
-      x_w0 = 1 - x_w1
-      y_w0 = 1 - y_w1
-      z_w0 = 1 - z_w1
-
-      x_ind0 = x_locs
-      x_ind1 = x_locs + 1
-      if dims.period[2]:
-         x_ind1 = x_ind1 % dims.x_size
-      else:
-         x_ind1 = min(max(x_ind1, 0), dims.x_size - 1)
-
-      y_ind0 = y_locs
-      y_ind1 = y_locs + 1
-      if dims.period[1]:
-         y_ind1 = y_ind1 % dims.y_size
-      else:
-         y_ind1 = min(max(y_ind1, 0), dims.y_size - 1)
-
-      z_ind0 = z_locs
-      z_ind1 = z_locs + 1
-      if dims.period[0]:
-         z_ind1 = z_ind1 % dims.z_size
-      else:
-         z_ind1 = min(max(z_ind1, 0), dims.z_size - 1)
-
-      y_ind0 *= dims.x_size
-      y_ind1 *= dims.x_size
-      z_ind0 *= dims.y_size*dims.x_size
-      z_ind1 *= dims.y_size*dims.x_size
+   if dims.oneV:
+      for xi in range(dims.x_size):
+         cellid = xi
          
-      x_ind = (x_ind0, x_ind1)
-      y_ind = (y_ind0, y_ind1)
-      z_ind = (z_ind0, z_ind1)
+         cells = np.array((xi,xi+1))
+         
+         if dims.period[0]:
+            cells[1] = cells[1]%dims.x_size
+         else:
+            cells[1] = min(max(cells[1], 0), dims.x_size - 1)
 
-      x_w = (x_w0,x_w1)
-      y_w = (y_w0,y_w1)
-      z_w = (z_w0,z_w1)
+         for ii in range(2):
+            cell_i = cells[ii]
+            for jj in range(2):
+               cell_j = cells[jj]
+               rows_M[cellid,ii,jj,0,0] = cell_i
+               cols_M[cellid,ii,jj,0,0] = cell_j
+   else:
+      col_block = np.array([[0,0,0],[1,1,1],[2,2,2]], dtype = np.int64)
+      row_block = np.array([[0,1,2],[0,1,2],[0,1,2]], dtype = np.int64)
+
+      for zi in range(dims.z_size):
+         for yi in range(dims.y_size):
+            for xi in range(dims.x_size):
+               cellid = (zi*dims.y_size + yi)*dims.x_size + xi
+
+               relative_step = np.array([[0,0,0], [0,0,1], [0,1,0], [0,1,1],
+                                         [1,0,0], [1,0,1], [1,1,0], [1,1,1]])
+
+               cells = get_index_njit(np.array((zi,yi,xi), dtype = np.int64), relative_step, dims)
+               cells = (cells[:,0]*dims.y_size + cells[:,1])*dims.x_size + cells[:,2]
+               
+               for ll in range(8):
+                  tmp_row = row_block + 3*cells[ll]
+                  for kk in range(8):
+                     tmp_col = col_block + 3*cells[kk]
+                     for jj in range(3):
+                        for ii in range(3):
+                           rows_M[cellid,ll,kk,jj,ii] = tmp_row[jj,ii]
+                           cols_M[cellid,ll,kk,jj,ii] = tmp_col[jj,ii]
+   
+   for pp in range(Np):
+      r = pop_r[pp]
+      index,weights = CIC_weights_node_njit(r, dims)
       
-      if dims.oneV is True:
-         for xi,x_wi in zip(x_ind,x_w):
-            for xj,x_wj in zip(x_ind,x_w):
-               M[0,0,xi,xj] += x_wi*x_wj * alpha[0,0]
+      if dims.oneV:
+         alpha = pop_alpha[pp,0,0]
+
+         weights = weights[0]
+
+         cellid = index[0,0]
+
+         for ll in range(2):
+            for kk in range(2):
+               data_M[cellid,ll,kk,0,0] += weights[ll]*weights[kk]*alpha
+         
       else:
-         for xi,x_wi in zip(x_ind,x_w):
-            for xj,x_wj in zip(x_ind,x_w):
-               for yi,y_wi in zip(y_ind,y_w):
-                  for yj,y_wj in zip(y_ind,y_w):
-                     for zi,z_wi in zip(z_ind,z_w):
-                        for zj,z_wj in zip(z_ind,z_w):
-                           for ii in range(3):
-                              for jj in range(3):
-                                 M[ii,jj,zi+yi+xi,zj+yj+xj] += x_wi*x_wj*y_wi*y_wj*z_wi*z_wj * alpha[ii,jj]
+         alpha = pop_alpha[pp]
+         
+         multi_weights = weights[0].reshape(1,1,2)*weights[1].reshape(1,2,1)*weights[2].reshape(2,1,1)
 
+         multi_weights = multi_weights.flatten()
+         
+         cellid = (index[2,0]*dims.y_size + index[1,0])*dims.x_size + index[0,0]
+
+         for ll in range(8):
+            for kk in range(8):
+               for jj in range(3):
+                  for ii in range(3):
+                     data_M[cellid,ll,kk,jj,ii] += multi_weights[ll]*multi_weights[kk]*alpha[jj,ii]
+   
+   data_M = data_M.flatten()
+   rows_M = rows_M.flatten()
+   cols_M = cols_M.flatten()
+                           
    beta = dims.phi*(q*dims.dt)/m
-   M *= beta * q*w/dims.dV
+   data_M *= beta * q*w/dims.dV
 
-   return M
+   return data_M,rows_M,cols_M

@@ -4,7 +4,6 @@ import math
 import numpy as np
 import scipy as sp
 import scipy.constants as const
-from scipy.sparse import coo_matrix
 from scipy.sparse.linalg import gmres
 from timeit import default_timer as timer
 import numba
@@ -48,6 +47,8 @@ parser.add_argument("-o", "--out-dir", type = str, default = "./",
                     help = "Output data directory path")
 parser.add_argument("--test", type = str, nargs = '*',
                     help = "Test interpolators and quit")
+parser.add_argument("--cmdline-step", type = int, default = 25,
+                    help = "Number of steps between reports of step count in command line")
 args = parser.parse_args()
 
 def configHelp():
@@ -88,7 +89,7 @@ def configHelp():
 
       Vdt_dx_cap (float): Maximum ratio of time step to dx/maxV, i.e. caps particle movement to given fraction of cell width, default is 0.5
 
-      save_steps (int): Number of iteration steps between saving data to file
+      save_steps (int): Number of iteration steps between saving data to file. Set to 0 to skip saving entirely
 
 
    [domain] options:
@@ -265,20 +266,26 @@ class my_timers:
       self.timers = dict()
 
    def tic(self, _timer_):
-      self.timers[_timer_] -= timer()
+      self.timers[_timer_].append(-timer())
    
    def toc(self, _timer_):
-      self.timers[_timer_] += timer()
+      self.timers[_timer_][-1] += timer()
+
+   def sum(self, _timer_, start = 0, end = None):
+      return np.sum(self.timers[_timer_][start:end])
+
+   def mean(self, _timer_, start = 0, end = None):
+      return np.mean(self.timers[_timer_][start:end])
    
    def start(self, _timer_):
-      self.timers[_timer_] = 0.0
+      self.timers[_timer_] = []
 
    def reset(self, _timer_ = None):
       if _timer_ == None:
          for key in self.timers.keys():
-            self.timers[key] = 0.0
+            self.timers[key] = []
       else:
-         self.timers[_timer_] = 0.0
+         self.timers[_timer_] = []
 
 Dims_spec = [
    ("x_min", float64),
@@ -423,7 +430,7 @@ def initialise_populations():
       # pops_njit[pop_name] = Pop_njit(charge, mass, weight, electron, macros, rng, dims, temp, velocity)
 
 def build_A(mass_matrices):
-   # Construct sparse matrix A of Ax = b equation representing Maxwell's equations
+   # Construct sparse array A of Ax = b equation representing Maxwell's equations
    if dims.oneV:
       A = np.zeros((2*dims.Ncells_total,2*dims.Ncells_total))
       # B-component of Faraday's Law
@@ -434,7 +441,7 @@ def build_A(mass_matrices):
 
       # E-component of Ampère's Law
       A[dims.Ncells_total:,dims.Ncells_total:] = np.identity(dims.Ncells_total)
-      A[dims.Ncells_total:,dims.Ncells_total:] += dims.dt*dims.theta*mass_matrices[0,0]/const.epsilon_0
+      A[dims.Ncells_total:,dims.Ncells_total:] += dims.dt*dims.theta*mass_matrices/const.epsilon_0
    else:
       A = np.zeros((6*dims.Ncells_total,6*dims.Ncells_total))
       # B-component of Faraday's Law
@@ -447,116 +454,11 @@ def build_A(mass_matrices):
 
       # E-component of Ampère's Law
       A[3*dims.Ncells_total:,3*dims.Ncells_total:] = np.identity(3*dims.Ncells_total)
-
-      mass = mass_matrices.transpose((2,1,3,0)).reshape(3*dims.Ncells_total,3*dims.Ncells_total)
       
-      A[3*dims.Ncells_total:,3*dims.Ncells_total:] += dims.dt*dims.theta*mass/const.epsilon_0
+      A[3*dims.Ncells_total:,3*dims.Ncells_total:] += dims.dt*dims.theta*mass_matrices/const.epsilon_0
    return A
 
 def build_b(faceB, nodeE, nodeJ_hat, mass_matrices):
-   # Construct constant vector b of Ax = b equation representing Maxwell's equations      
-   if dims.oneV:
-      Ex = nodeE[:,:,:,0].flatten()
-
-      Jx = nodeJ_hat[:,:,:,0].flatten()
-      Jx += (1 - dims.theta)*mass_matrices[0,0]@Ex
-      
-      b = np.zeros(2*dims.Ncells_total)
-      # Constant term of Faraday's Law
-      b[:dims.Ncells_total] += faceB[:,:,:,0].flat
-
-      # Constant term of Ampère's Law
-      b[dims.Ncells_total:] += Ex-dims.dt*Jx/const.epsilon_0
-   else:
-      # Jx = np.zeros(Jx.shape)
-      # Jy = np.zeros(Jy.shape)
-      # Jz = np.zeros(Jz.shape)
-
-      # Jx += (1 - dims.theta)*mass_matrices[0,0]@E_split[0].flat
-      # Jx += (1 - dims.theta)*mass_matrices[0,1]@E_split[1].flat
-      # Jx += (1 - dims.theta)*mass_matrices[0,2]@E_split[2].flat
-      
-      # Jy += (1 - dims.theta)*mass_matrices[1,0]@E_split[0].flat
-      # Jy += (1 - dims.theta)*mass_matrices[1,1]@E_split[1].flat
-      # Jy += (1 - dims.theta)*mass_matrices[1,2]@E_split[2].flat
-
-      # Jz += (1 - dims.theta)*mass_matrices[2,0]@E_split[0].flat
-      # Jz += (1 - dims.theta)*mass_matrices[2,1]@E_split[1].flat
-      # Jz += (1 - dims.theta)*mass_matrices[2,2]@E_split[2].flat
-      
-      E_split = split_axis(nodeE, axis = 3)
-      
-      mass = (1 - dims.theta)*mass_matrices.transpose((1,0,2,3))
-
-      J_mod = np.empty((3,3,dims.Ncells_total), dtype = np.float64)
-      
-      for ii in range(3):
-         J_mod[ii] = np.matvec(mass[ii], E_split[ii].flat)
-
-      J_mod = np.sum(J_mod, axis = 0)
-      
-      b = np.zeros(6*dims.Ncells_total)
-
-      J_star = nodeJ_hat.copy().flatten()
-      J_star += J_mod.transpose().flatten()
-      
-      # Constant term of Faraday's Law
-      b[:3*dims.Ncells_total] += faceB.flat
-      b[:3*dims.Ncells_total] -= (curl_node2face(nodeE, dims)*dims.dt*(1-dims.theta)).flat
-      
-      # Constant term of Ampère's Law
-      b[3*dims.Ncells_total:] += nodeE.flat
-      b[3*dims.Ncells_total:] -= dims.dt*J_star/const.epsilon_0
-      b[3*dims.Ncells_total:] += (curl_face2node(faceB, dims)*const.c**2*dims.dt*(1-dims.theta)).flat
-   
-   return b
-
-def build_A_coo(mass_matrices):
-   # Construct sparse coo matrix A of Ax = b equation representing Maxwell's equations
-   if dims.oneV:
-      # B-component of Faraday's Law
-      FaradayB = sp.sparse.identity(dims.Ncells_total, dtype = np.float64, format = 'coo')
-
-      # E-component of Faraday's Law
-      FaradayE = sp.sparse.coo_matrix((dims.Ncells_total,dims.Ncells_total), dtype = np.float64)
-
-      # B-component of Ampère's Law
-      AmpereB = sp.sparse.coo_matrix((dims.Ncells_total,dims.Ncells_total), dtype = np.float64)
-
-      # E-component of Ampère's Law
-      AmpereE = sp.sparse.identity(dims.Ncells_total, dtype = np.float64, format = 'coo')
-      
-      AmpereE += dims.dt*dims.theta*mass_matrices/const.epsilon_0
-   else:
-      block_shape = (3*dims.Ncells_total,3*dims.Ncells_total)
-      
-      # B-component of Faraday's Law
-      FaradayB = sp.sparse.identity(3*dims.Ncells_total, dtype = np.float64, format = 'coo')
-      
-      # E-component of Faraday's Law
-      data,rows,cols = get_operator_coo_curl_node2face(dims)
-      FaradayE = coo_matrix((data,(rows,cols)), shape = block_shape)*dims.dt*dims.theta
-      FaradayE.sum_duplicates()
-      
-      # B-component of Ampère's Law
-      data,rows,cols = get_operator_coo_curl_face2node(dims)
-      AmpereB = -coo_matrix((data,(rows,cols)), shape = block_shape)*dims.dt*dims.theta*const.c**2
-      AmpereB.sum_duplicates()
-
-      # E-component of Ampère's Law
-      AmpereE = sp.sparse.identity(3*dims.Ncells_total, dtype = np.float64, format = 'coo')
-
-      AmpereE += dims.dt*dims.theta*mass_matrices/const.epsilon_0
-
-      AmpereE.sum_duplicates()
-
-   Faraday = sp.sparse.hstack((FaradayB,FaradayE))
-   Ampere = sp.sparse.hstack((AmpereB,AmpereE))
-   A = sp.sparse.vstack((Faraday,Ampere))
-      
-   return A
-
-def build_b_coo(faceB, nodeE, nodeJ_hat, mass_matrices):
    # Construct constant vector b of Ax = b equation representing Maxwell's equations
    if dims.oneV:
       b = np.zeros(2*dims.Ncells_total)
@@ -589,6 +491,59 @@ def build_b_coo(faceB, nodeE, nodeJ_hat, mass_matrices):
       b[3*dims.Ncells_total:] += (curl_face2node(faceB, dims)*const.c**2*dims.dt*(1-dims.theta)).flat
    
    return b
+
+def build_A_coo(mass_matrices):
+   # Construct sparse coo array A of Ax = b equation representing Maxwell's equations
+   if dims.oneV:
+      # B-component of Faraday's Law
+      FaradayB = sp.sparse.identity(dims.Ncells_total, dtype = np.float64, format = 'csr')
+
+      # E-component of Faraday's Law not present due to 1V
+      FaradayE = None
+
+      # B-component of Ampère's Law not present due to 1V
+      AmpereB = None
+      
+      # E-component of Ampère's Law
+      AmpereE = sp.sparse.identity(dims.Ncells_total, dtype = np.float64, format = 'csr')
+      
+      AmpereE += dims.dt*dims.theta*mass_matrices/const.epsilon_0
+
+      AmpereE.sum_duplicates()
+   else:
+      block_shape = (3*dims.Ncells_total,3*dims.Ncells_total)
+      
+      # B-component of Faraday's Law
+      FaradayB = sp.sparse.identity(3*dims.Ncells_total, dtype = np.float64, format = 'csr')
+      
+      # E-component of Faraday's Law
+      data,rows,cols = get_operator_coo_curl_node2face(dims)
+      FaradayE = sp.sparse.coo_array((data,(rows,cols)), shape = block_shape)*dims.dt*dims.theta
+      
+      # B-component of Ampère's Law
+      data,rows,cols = get_operator_coo_curl_face2node(dims)
+      AmpereB = -sp.sparse.coo_array((data,(rows,cols)), shape = block_shape)*dims.dt*dims.theta*const.c**2
+
+      # E-component of Ampère's Law
+      AmpereE = sp.sparse.identity(3*dims.Ncells_total, dtype = np.float64, format = 'csr')
+
+      AmpereE += dims.dt*dims.theta*mass_matrices/const.epsilon_0
+
+      FaradayE.sum_duplicates()
+      AmpereB.sum_duplicates()
+      AmpereE.sum_duplicates()
+      
+      FaradayB = FaradayB.tocsr()
+      FaradayE = FaradayE.tocsr()
+      AmpereB = AmpereB.tocsr()
+      AmpereE = AmpereE.tocsr()
+      
+   A = sp.sparse.block_array([[FaradayB,FaradayE],[AmpereB,AmpereE]])
+
+   if not dims.oneV:
+      A = A.tobsr((3,3))
+   
+   return A
 
 def test_interpolators(function = None):
    # Test interpolation methods
@@ -748,7 +703,7 @@ def test_interpolators(function = None):
             operator = get_operator_curl_face2node(dims)
             curl_f2n_op = (operator@face.flat).reshape(dims.dim_vector)
             data,rows,cols = get_operator_coo_curl_face2node(dims)
-            operator_coo = coo_matrix((data,(rows,cols)), shape = (3*dims.Ncells_total,3*dims.Ncells_total))
+            operator_coo = sp.sparse.coo_array((data,(rows,cols)), shape = (3*dims.Ncells_total,3*dims.Ncells_total))
             curl_f2n_op_coo = (operator_coo@face.flat).reshape(dims.dim_vector)
             compare("curl_face2node:   ",
                     (curl_f2n,curl_f2n_njit,curl_f2n_njit_alt,curl_f2n_op,curl_f2n_op_coo))
@@ -759,7 +714,7 @@ def test_interpolators(function = None):
             operator = get_operator_curl_node2face(dims)
             curl_n2f_op = (operator@node.flat).reshape(dims.dim_vector)
             data,rows,cols = get_operator_coo_curl_node2face(dims)
-            operator_coo = coo_matrix((data,(rows,cols)), shape = (3*dims.Ncells_total,3*dims.Ncells_total))
+            operator_coo = sp.sparse.coo_array((data,(rows,cols)), shape = (3*dims.Ncells_total,3*dims.Ncells_total))
             curl_n2f_op_coo = (operator_coo@node.flat).reshape(dims.dim_vector)
             compare("curl_node2face:   ",
                     (curl_n2f,curl_n2f_njit,curl_n2f_njit_alt,curl_n2f_op,curl_n2f_op_coo))
@@ -1144,7 +1099,7 @@ if __name__ == '__main__':
       config.getfloat("electric_field", "Ez")
    )
 
-   fields = Fields(pops, B_types, B_init, E_types, config, rng, dims)
+   fields = Fields(pops, B_types, E_types, config, rng, dims)
 
    cap_dt(pops)
 
@@ -1160,7 +1115,11 @@ if __name__ == '__main__':
       print("Output file(s) already exist, aborting")
       sys.exit()
 
+   timers.tic("output")
+      
    save_data(args.out_dir, fields, pops, dims)
+
+   timers.toc("output")
    
    tolerance_error = False
    
@@ -1169,9 +1128,9 @@ if __name__ == '__main__':
    for jj in range(1, args.steps + 1):
       logger.newline()
       logger.info("Starting time step " + str(jj))
-      if jj%25 == 0:
+      if jj%args.cmdline_step == 0:
          print("Starting time step " + str(jj))
-
+      
       timers.tic("locs")
 
       logger.info("Moving particles")
@@ -1204,36 +1163,36 @@ if __name__ == '__main__':
       #    mass_matrices = np.zeros((1,1,dims.Ncells_total,dims.Ncells_total))
       # else:
       #    mass_matrices = np.zeros((3,3,dims.Ncells_total,dims.Ncells_total))
-      # 
+      
       # for pop in pops.values():
       #    if pop.static is False:
       #       mass_matrices += compute_mass_matrices_njit(
       #          pop.r, pop.alpha, pop.m, pop.q, pop.w, dims)
-      
-      data_M = []
-      rows_M = []
-      cols_M = []
-      
-      for pop in pops.values():
-         if pop.static is False:
-            dat,row,col = compute_mass_matrices_coo(pop, dims)
-            data_M.append(dat)
-            rows_M.append(row)
-            cols_M.append(col)
-      
-      data_M = np.concatenate(data_M)
-      rows_M = np.concatenate(rows_M)
-      cols_M = np.concatenate(cols_M)
+
+      # if dims.oneV:
+      #    mass_matrices = mass_matrices[0,0]
+      # else:
+      #    mass_matrices = mass_matrices.transpose((2,1,3,0)).reshape(3*dims.Ncells_total,3*dims.Ncells_total)
 
       if oneV:
          block_shape = (dims.Ncells_total,dims.Ncells_total)
       else:
          block_shape = (3*dims.Ncells_total,3*dims.Ncells_total)
-      
-      mass_matrices_coo = coo_matrix((data_M,(rows_M,cols_M)),
-                                     shape = block_shape)
+
+      mass_matrices_coo = sp.sparse.csr_array(block_shape, dtype = np.float64)
+         
+      for pop in pops.values():
+         if pop.static is False:
+            # dat,row,col = compute_mass_matrices_coo(pop, dims)
+            dat,row,col = compute_mass_matrices_coo_njit(
+               pop.r, pop.alpha, pop.m, pop.q, pop.w, dims)
+            tmp = sp.sparse.coo_array((dat,(row,col)), shape = block_shape)
+            tmp.sum_duplicates()
+            tmp = tmp.tocsr()
+            mass_matrices_coo += tmp
+
       mass_matrices_coo.sum_duplicates()
-      
+            
       timers.toc("mass matrices")
       timers.tic("maxwell")
 
@@ -1242,7 +1201,7 @@ if __name__ == '__main__':
       timers.tic("build b")
       
       # b = build_b(fields.faceB, fields.nodeE, nodeJ_hat, mass_matrices)
-      b_coo = build_b_coo(fields.faceB, fields.nodeE, nodeJ_hat, mass_matrices_coo)
+      b_coo = build_b(fields.faceB, fields.nodeE, nodeJ_hat, mass_matrices_coo)
       
       timers.toc("build b")
       timers.tic("build A")
@@ -1264,6 +1223,7 @@ if __name__ == '__main__':
       
       while info > 0 and rtol < 1e-2 and atol < 1e-2:
          
+         # xnext,info = gmres(A, b, rtol = rtol, atol = atol, x0 = x0)
          xnext,info = gmres(A_coo, b_coo, rtol = rtol, atol = atol, x0 = x0)
          if info > 0:
             logger.info("GMRES tolerance failure on step " + str(jj) + ", reducing tolerance")
@@ -1311,7 +1271,7 @@ if __name__ == '__main__':
       # Increment time
       dims.step_time()
 
-      if (jj+1)%save_steps == 0:
+      if save_steps > 0 and (jj+1)%save_steps == 0:
          timers.tic("extra")
          
          for pop in pops.values():
@@ -1328,7 +1288,7 @@ if __name__ == '__main__':
 
    logger.newline()
    logger.info("Saving final state")
-         
+   
    timers.tic("extra")
    
    for pop in pops.values():
@@ -1349,19 +1309,25 @@ if __name__ == '__main__':
    logger.info("Simulation complete")
    
    print("")
+   print("Total time [s]:       " + floatToStr(timers.timers["total"][0],
+                                               decimals = 3))
+   print("Initialisation [s]:   " + floatToStr(timers.timers["init"][0],
+                                               decimals = 3))
+
+   print("")
    print("Time per timestep and cell [ms/(cell timestep)]:")
-   print("Total time:           " + floatToStr(1000*timers.timers["total"]/(dims.timestep*dims.Ncells_total), decimals = 3))
-   print("Initialisation:       " + floatToStr(1000*timers.timers["init"]/(dims.timestep*dims.Ncells_total), decimals = 3))
-   print("Particle locs update: " + floatToStr(1000*timers.timers["locs"]/(dims.timestep*dims.Ncells_total), decimals = 3))
-   print("Alpha Computation:    " + floatToStr(1000*timers.timers["alpha"]/(dims.timestep*dims.Ncells_total), decimals = 3))
-   print("Current Accumulation: " + floatToStr(1000*timers.timers["current"]/(dims.timestep*dims.Ncells_total), decimals = 3))
-   print("Mass Matrices:        " + floatToStr(1000*timers.timers["mass matrices"]/(dims.timestep*dims.Ncells_total), decimals = 3))
-   print("Maxwell:              " + floatToStr(1000*timers.timers["maxwell"]/(dims.timestep*dims.Ncells_total), decimals = 3))
-   print("   build A:           " + floatToStr(1000*timers.timers["build A"]/(dims.timestep*dims.Ncells_total), decimals = 3))
-   print("   build b:           " + floatToStr(1000*timers.timers["build b"]/(dims.timestep*dims.Ncells_total), decimals = 3))
-   print("   gmres:             " + floatToStr(1000*timers.timers["gmres"]/(dims.timestep*dims.Ncells_total), decimals = 3))
-   print("Lorentz Force update: " + floatToStr(1000*timers.timers["lorentz"]/(dims.timestep*dims.Ncells_total), decimals = 3))
-   print("Unused fields update: " + floatToStr(1000*timers.timers["extra"]/(dims.timestep*dims.Ncells_total), decimals = 3))
-   print("Field Solver:         " + floatToStr(1000*timers.timers["field solver"]/(dims.timestep*dims.Ncells_total), decimals = 3))
-   print("Particle Mover:       " + floatToStr(1000*(timers.timers["locs"] + timers.timers["lorentz"])/(dims.timestep*dims.Ncells_total), decimals = 3))
-   print("Data saving:          " + floatToStr(1000*timers.timers["output"]/(dims.timestep*dims.Ncells_total), decimals = 3))
+                    
+   print("Particle locs update: " + floatToStr(1000*timers.mean("locs", 1)/dims.Ncells_total, decimals = 3))
+   print("Alpha Computation:    " + floatToStr(1000*timers.mean("alpha", 1)/dims.Ncells_total, decimals = 3))
+   print("Current Accumulation: " + floatToStr(1000*timers.mean("current", 1)/dims.Ncells_total, decimals = 3))
+   print("Mass Matrices:        " + floatToStr(1000*timers.mean("mass matrices", 1)/dims.Ncells_total, decimals = 3))
+   print("Maxwell:              " + floatToStr(1000*timers.mean("maxwell", 1)/dims.Ncells_total, decimals = 3))
+   print("   build A:           " + floatToStr(1000*timers.mean("build A", 1)/dims.Ncells_total, decimals = 3))
+   print("   build b:           " + floatToStr(1000*timers.mean("build b", 1)/dims.Ncells_total, decimals = 3))
+   print("   gmres:             " + floatToStr(1000*timers.mean("gmres", 1)/dims.Ncells_total, decimals = 3))
+   print("Lorentz Force update: " + floatToStr(1000*timers.mean("lorentz", 1)/dims.Ncells_total, decimals = 3))
+   print("Unused fields update: " + floatToStr(1000*timers.mean("extra")/dims.Ncells_total, decimals = 3))
+   print("Field Solver:         " + floatToStr(1000*timers.mean("field solver", 1)/dims.Ncells_total, decimals = 3))
+   print("Particle Mover:       " + floatToStr(1000*(timers.mean("locs", 1) + timers.mean("lorentz", 1))/dims.Ncells_total, decimals = 3))
+   if save_steps > 0:
+      print("Data saving:          " + floatToStr(1000*timers.mean("output")/(save_steps*dims.Ncells_total), decimals = 3))

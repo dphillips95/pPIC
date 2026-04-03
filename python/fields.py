@@ -52,14 +52,21 @@ class Fields:
             self.nodeE[:,:,:,1] += Ey
             self.nodeE[:,:,:,2] += Ez
          elif E_type == "rand":
-            Ex = config.getfloat("electric_field", "Ex")
-            Ey = config.getfloat("electric_field", "Ey")
-            Ez = config.getfloat("electric_field", "Ez")
+            Ex_min = config.getfloat("electric_field", "rand_Ex_min")
+            Ex_max = config.getfloat("electric_field", "rand_Ex_max")
+            Ey_min = config.getfloat("electric_field", "rand_Ey_min")
+            Ey_max = config.getfloat("electric_field", "rand_Ey_max")
+            Ez_min = config.getfloat("electric_field", "rand_Ez_min")
+            Ez_max = config.getfloat("electric_field", "rand_Ez_max")
 
             if dims.oneV is True:
-               Ey = Ez = 0
+               Ey_min = Ey_max = Ez_min = Ez_max = 0
+
+            Ex = rng.uniform(-Ex_min, Ex_max, dims.dim_scalar)
+            Ey = rng.uniform(-Ey_min, Ey_max, dims.dim_scalar)
+            Ez = rng.uniform(-Ez_min, Ez_max, dims.dim_scalar)
             
-            self.nodeE = rng.uniform(-1, 1, dims.dim_vector)
+            self.nodeE = np.stack((Ex,Ey,Ez), axis = -1)
       
       apply_boundaries_fields(self.nodeE, dims)
 
