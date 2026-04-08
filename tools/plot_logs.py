@@ -14,6 +14,8 @@ import argparse
 parser = argparse.ArgumentParser()
 parser.add_argument("--vars", type = str, nargs = '+',
                     help = "List of variables to plot, if unset plots all")
+parser.add_argument("-l", "--log", action = 'store_true',
+                    help = "Plot appropriate plots (e.g. energy) as log plots")
 args = parser.parse_args()
 
 def saveFigure(fig, filePath, dpi, attempts = 100, delay = 1, tight = False):
@@ -324,7 +326,7 @@ for fig_name in fig_list:
    elif fig_name == "maxFaceB_mag":
       figs.append(plotFigure(logs.t, logs.maxFaceB_mag, "max(|faceB|)", "T"))
    elif fig_name == "energy_B":
-      figs.append(plotFigure(logs.t, logs.energy_B, "energy(faceB)", "J", log = True))
+      figs.append(plotFigure(logs.t, logs.energy_B, "energy(faceB)", "J", log = args.log))
    elif fig_name == "avgNodeEx":
       figs.append(plotFigure(logs.t, logs.avgNodeEx, "avg(nodeEx)", "V/m"))
    elif fig_name == "avgNodeEy":
@@ -336,7 +338,7 @@ for fig_name in fig_list:
    elif fig_name == "maxNodeE_mag":
       figs.append(plotFigure(logs.t, logs.maxNodeE_mag, "max(|nodeE|)", "V/m"))
    elif fig_name == "energy_E":
-      figs.append(plotFigure(logs.t, logs.energy_E, "energy(nodeE)", "J", log = True))
+      figs.append(plotFigure(logs.t, logs.energy_E, "energy(nodeE)", "J", log = args.log))
    elif fig_name == "avgCellRhoQ":
       figs.append(plotFigure(logs.t, logs.avgCellRhoQ, "avg(cellRhoQ)", r"C/m$^3$"))
    elif fig_name == "avgCellJx":
@@ -350,7 +352,7 @@ for fig_name in fig_list:
    elif fig_name == "maxCellJ_mag":
       figs.append(plotFigure(logs.t, logs.maxCellJ_mag, "max(|cellJ|)", r"A/m$^2$"))
    elif fig_name == "total_energy":
-      figs.append(plotFigure(logs.t, logs.total_energy, "Total Energy", "J", log = True))
+      figs.append(plotFigure(logs.t, logs.total_energy, "Total Energy", "J"))
 
 with PdfPages("field_logs.pdf", keep_empty = False) as pdf:
    for fig in figs:
@@ -385,7 +387,7 @@ for pop in pop_list:
       elif fig_name == "maxCellJi_mag":
          figs.append(plotFigure(logs.t, logs[pop + "_maxCellJi_mag"], pop + " max(|cellJ|)", r"A/m$^2$"))
       elif fig_name == "KE":
-         figs.append(plotFigure(logs.t, logs[pop + "_KE"], pop + " Kinetic Energy", "J", log = True))
+         figs.append(plotFigure(logs.t, logs[pop + "_KE"], pop + " Kinetic Energy", "J", log = args.log))
 
 with PdfPages("pop_logs.pdf", keep_empty = False) as pdf:
    for fig in figs:

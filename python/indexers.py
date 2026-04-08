@@ -1,6 +1,7 @@
 # Module of general tools, e.g. array rolling/sliding
 
 import math
+import functools as ftools
 import numpy as np
 from numba import njit,int64
 
@@ -37,20 +38,14 @@ def get_index_njit(initial, relative_step, dims):
    # and if non-periodic, return (4,5,2)
    # relative_step should be 2d array, each row is a different step
    new_ind = np.empty(relative_step.shape, dtype = initial.dtype)
-   for ii in range(relative_step.shape[0] + 1):
-      if dims.period[0]:
-         new_ind[ii,0] = (initial[0] + relative_step[ii][0])%dims.z_size
-      else:
-         new_ind[ii,0] = min(max(new_ind[ii,0], 0), dims.z_size - 1)
-      if dims.period[1]:
-         new_ind[ii,1] = (initial[1] + relative_step[ii][1])%dims.y_size
-      else:
-         new_ind[ii,1] = min(max(new_ind[ii,1], 0), dims.y_size - 1)
-      if dims.period[0]:
-         new_ind[ii,2] = (initial[2] + relative_step[ii][2])%dims.x_size
-      else:
-         new_ind[ii,2] = min(max(new_ind[ii,2], 0), dims.x_size - 1)
-
+   for ii in range(relative_step.shape[0]):
+      for jj in range(3):
+         new_ind[ii,jj] = initial[jj] + relative_step[ii,jj]
+         if dims.period[jj]:
+            new_ind[ii,jj] = new_ind[ii,jj]%dims.dim_scalar[jj]
+         else:
+            new_ind[ii,jj] = min(max(new_ind[ii,jj], 0), dims.dim_scalar[jj] - 1)
+   
    return new_ind
 
 @njit(cache = True)#, fastmath = True)

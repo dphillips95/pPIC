@@ -19,7 +19,7 @@ import types
 
 from indexers import split_axis,floatToStr,shift_indices,shift_indices_njit
 from interpolators import face2cell,face2node,face2r,cell2node,cell2face,cell2r,node2face,node2cell,node2r,div_face2cell,div_node2cell,curl_face2node,curl_node2face,face2cell_njit,face2node_njit,face2r_njit,cell2node_njit,cell2face_njit,cell2r_njit,node2face_njit,node2cell_njit,node2r_njit,div_face2cell_njit,div_node2cell_njit,curl_face2node_njit,curl_node2face_njit,face2cell_njit_alt,face2node_njit_alt,cell2node_njit_alt,cell2face_njit_alt,node2face_njit_alt,node2cell_njit_alt,div_face2cell_njit_alt,div_node2cell_njit_alt,curl_face2node_njit_alt,curl_node2face_njit_alt,get_operator_curl_face2node,get_operator_curl_node2face,get_operator_coo_curl_face2node,get_operator_coo_curl_node2face
-from populations import Pop,compute_alpha,moveParticles,Lorentz,compute_rotated_current,compute_mass_matrices,accumulators,calcNodeData,Pop_njit,compute_alpha_njit,moveParticles_njit,Lorentz_njit,compute_rotated_current_njit,compute_mass_matrices_njit,compute_mass_matrices_alt,compute_mass_matrices_coo,compute_mass_matrices_coo_alt,compute_mass_matrices_coo_njit
+from populations import Pop,compute_alpha,moveParticles,Lorentz,compute_rotated_current,compute_mass_matrices,accumulators,calcNodeData,Pop_njit,compute_alpha_njit,moveParticles_njit,Lorentz_njit,compute_rotated_current_njit,compute_mass_matrices_njit,compute_mass_matrices_alt,compute_mass_matrices_coo,compute_mass_matrices_coo_alt,compute_mass_matrices_coo_njit,compute_mass_matrices_coo_njit_alt2,compute_mass_matrices_coo_njit_rowCol,compute_mass_matrices_coo_njit_alt2_rowCol
 from fields import Fields,upwind_fields
 from output import save_data
 
@@ -93,16 +93,20 @@ def configHelp():
 
 
    [domain] options:
-
+   
       x_min (m): Minimum x-coordinate
       x_max (m): Maximum x-coordinate
 
-      y_min (m): Minimum y-coordinate, ignored if dimensions < 2. If this and y_max are both unset then places boxes around y = 0, i.e. y_min = -y_size*dx/2
-      y_max (m): Maximum y-coordinate, ignored if dimensions < 2. If this and y_min are both unset then places boxes around y = 0, i.e. y_max = y_size*dx/2
+      y_min (m): Minimum y-coordinate, ignored if dimensions < 2. If this, y_max and dy are all unset then places boxes around y = 0, i.e. y_min = -y_size*dx/2
+      y_max (m): Maximum y-coordinate, ignored if dimensions < 2. If this, y_min and dy are all unset then places boxes around y = 0, i.e. y_max = y_size*dx/2
 
-      z_min (m): Minimum z-coordinate, ignored if dimensions < 3. If this and z_max are both unset then places boxes around z = 0, i.e. z_min = -z_size*dx/2
-      z_max (m): Maximum z-coordinate, ignored if dimensions < 2. If this and z_min are both unset then places boxes around z = 0, i.e. z_max = z_size*dx/2
+      z_min (m): Minimum z-coordinate, ignored if dimensions < 3. If this, z_max and dz are all unset then places boxes around z = 0, i.e. z_min = -z_size*dx/2
+      z_max (m): Maximum z-coordinate, ignored if dimensions < 2. If this, z_min and dz are all unset then places boxes around z = 0, i.e. z_max = z_size*dx/2
 
+      dx (m): Width of a single cell in x-dimension. Used instead of x_min,x_max to specify by cell size instead of domain size. If any two of x_min,x_max,dx are set then the third is inferred via x_size; if all three are set then dx is ignored. If only dx is set then x_min and x_max are inferred assuming x_min = -x_max
+      dy (m): Height of a single cell in y-dimension. Used instead of y_min,y_max to specify by cell size instead of domain size. If any two of y_min,y_max,dy are set then the third is inferred via y_size; if all three are set then dy is ignored. If only dy is set then y_min and y_max are inferred assuming y_min = -y_max
+      dz (m): Depth of a single cell in z-dimension. Used instead of z_min,z_max to specify by cell size instead of domain size. If any two of z_min,z_max,dz are set then the third is inferred via z_size; if all three are set then dz is ignored. If only dz is set then z_min and z_max are inferred assuming z_min = -z_max
+      
       x_size (int): Number of cells in x-dimension
       y_size (int): Number of cells in y-dimension, ignored if dimensions < 2
       z_size (int): Number of cells in z-dimension, ignored if dimensions < 3
@@ -979,9 +983,34 @@ z_periodic = config.getboolean("domain", "z_periodic", fallback = True)
 
 rng = np.random.default_rng(args.seed)
 
-x_min = config.getfloat("domain", "x_min", fallback = 0.0)
-x_max = config.getfloat("domain", "x_max", fallback = 1.0)
+x_min = config.get("domain", "x_min", fallback = None)
+x_max = config.get("domain", "x_max", fallback = None)
+dx = config.get("domain", "dx", fallback = None)
+
+if x_min is not None:
+   x_min = float(x_min)
+if x_max is not None:
+   x_max = float(x_max)
+if dx is not None:
+   dx = float(dx)
+
 x_size = config.getint("domain", "x_size", fallback = 1)
+
+if x_max is None:
+   if dx is None:
+      raise ValueError("Insufficient x-dimension parameters")
+   elif x_min is None:
+      x_max = x_size*dx/2
+      x_min = -x_max
+   else:
+      x_max = x_min + x_size*dx
+else:
+   if x_min is None:
+      if dx is None:
+         raise ValueError("Insufficient x-dimension parameters")
+      else:
+         x_min = x_max - x_size*dx
+
 dx = (x_max - x_min)/x_size
 
 if dimensions < 2:
@@ -991,19 +1020,40 @@ if dimensions < 2:
    y_periodic = True
    dy = dx
 else:
-   y_size = config.getint("domain", "y_size", fallback = 1)
    y_min = config.get("domain", "y_min", fallback = None)
    y_max = config.get("domain", "y_max", fallback = None)
-   if y_min is None and y_max is None:
-      y_min = -y_size*dx/2
-      y_max = y_size*dx/2
-      dy = dx
-   elif y_min is None or y_max is None:
-      raise TypeError("One of y_min or y_max not set; either both must be set or neither")
-   else:
+   dy = config.get("domain", "dy", fallback = None)
+
+   if y_min is not None:
       y_min = float(y_min)
+   if y_max is not None:
       y_max = float(y_max)
-      dy = (y_max - y_min)/y_size
+   if dy is not None:
+      dy = float(dy)
+
+   y_size = config.getint("domain", "y_size", fallback = 1)
+
+   if y_max is None:
+      if dy is None:
+         if y_min is not None:
+            raise ValueError("Only y_min is set")
+         y_min = -y_size*dx/2
+         y_max = y_size*dx/2
+         dy = dx
+      elif y_min is None:
+         y_max = y_size*dy/2
+         y_min = -y_max
+         dy = (y_max - y_min)/y_size
+      else:
+         y_max = y_min + y_size*dy
+         dy = (y_max - y_min)/y_size
+   else:
+      if y_min is None:
+         if dy is None:
+            raise ValueError("Only y_max is set")
+         else:
+            y_min = y_max - y_size*dy
+            dy = (y_max - y_min)/y_size
 
 if dimensions < 3:
    z_min = -dx/2
@@ -1012,19 +1062,40 @@ if dimensions < 3:
    z_periodic = True
    dz = dx
 else:
-   z_size = config.getint("domain", "z_size", fallback = 1)
    z_min = config.get("domain", "z_min", fallback = None)
    z_max = config.get("domain", "z_max", fallback = None)
-   if z_min is None and z_max is None:
-      z_min = -z_size*dx/2
-      z_max = z_size*dx/2
-      dz = dx
-   elif z_min is None or z_max is None:
-      raise TypeError("One of z_min or z_max not set; either both must be set or neither")
-   else:
+   dz = config.get("domain", "dz", fallback = None)
+
+   if z_min is not None:
       z_min = float(z_min)
+   if z_max is not None:
       z_max = float(z_max)
-      dz = (z_max - z_min)/z_size
+   if dz is not None:
+      dz = float(dz)
+
+   z_size = config.getint("domain", "z_size", fallback = 1)
+
+   if z_max is None:
+      if dz is None:
+         if z_min is not None:
+            raise ValueError("Onlz y_min is set")
+         z_min = -z_size*dx/2
+         z_max = z_size*dx/2
+         dz = dx
+      elif z_min is None:
+         z_max = z_size*dz/2
+         z_min = -z_max
+         dz = (z_max - z_min)/z_size
+      else:
+         z_max = z_min + z_size*dz
+         dz = (z_max - z_min)/z_size
+   else:
+      if z_min is None:
+         if dz is None:
+            raise ValueError("Only z_max is set")
+         else:
+            z_min = z_max - z_size*dz
+            dz = (z_max - z_min)/z_size
 
 # Extend axes if not periodic, to add ghost cells
 if not x_periodic:
@@ -1108,7 +1179,11 @@ if __name__ == '__main__':
       if pop.static is False:
          logger.info("Uncentering particles of population " + name)
          moveParticles(pop, -dims.dt*(1-dims.phi), dims)
-
+         # pop.sort()
+   
+   row,col = compute_mass_matrices_coo_njit_rowCol(dims)
+   # row,col = compute_mass_matrices_coo_njit_alt2_rowCol(dims)
+         
    timers.toc("init")
    
    if os.path.isfile(args.out_dir + "/fields.h5") or os.path.isfile(args.out_dir + "/pops.h5") or os.path.isfile(args.out_dir + "/logs.h5" or os.path.isfile(args.out_dir + "/logfile.txt")):
@@ -1137,7 +1212,8 @@ if __name__ == '__main__':
       for pop in pops.values():
          if pop.static is False:
             moveParticles(pop, dims.dt, dims)
-
+            # pop.sort()
+            
       timers.toc("locs")
       timers.tic("alpha")
       timers.tic("field solver")
@@ -1184,8 +1260,12 @@ if __name__ == '__main__':
       for pop in pops.values():
          if pop.static is False:
             # dat,row,col = compute_mass_matrices_coo(pop, dims)
-            dat,row,col = compute_mass_matrices_coo_njit(
+            dat = compute_mass_matrices_coo_njit(
                pop.r, pop.alpha, pop.m, pop.q, pop.w, dims)
+
+            # dat = compute_mass_matrices_coo_njit_alt2(
+            #    pop.r, pop.alpha, pop.cids, pop.m, pop.q, pop.w, dims)
+            
             tmp = sp.sparse.coo_array((dat,(row,col)), shape = block_shape)
             tmp.sum_duplicates()
             tmp = tmp.tocsr()
