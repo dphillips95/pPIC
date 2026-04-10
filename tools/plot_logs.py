@@ -145,14 +145,14 @@ def plotFigure(t_data, var_data, var_label, unit = None, rescale_x = True, resca
       yRange[0] = mid - diff*0.05
       yRange[1] = mid + diff*0.05
    
-   x_pts = np.linspace(*xRange)
-   y_pts = 1e-8 * np.exp(0.35*math.sqrt(2*314208961640850*const.e**2/(const.m_e*const.epsilon_0))*x_pts)
+   # x_pts = np.linspace(*xRange)
+   # y_pts = 1e-8 * np.exp(0.35*math.sqrt(2*314208961640850*const.e**2/(const.m_e*const.epsilon_0))*x_pts)
          
    if rescale_x is True:
       x_log = math.floor(math.log(np.max(np.abs(xRange)), 1e3))
       t_data = t_data/1e3**x_log
       xRange = xRange/1e3**x_log
-      x_pts /= 1e3**x_log
+      # x_pts /= 1e3**x_log
    else:
       x_log = 0
 
@@ -160,7 +160,7 @@ def plotFigure(t_data, var_data, var_label, unit = None, rescale_x = True, resca
       y_log = math.floor(math.log(np.max(np.abs(yRange)), 1e3))
       var_data = var_data/1e3**y_log
       yRange = yRange/1e3**y_log
-      y_pts /= 1e3**y_log
+      # y_pts /= 1e3**y_log
    else:
       y_log = 0
    
@@ -177,7 +177,7 @@ def plotFigure(t_data, var_data, var_label, unit = None, rescale_x = True, resca
    # scatter = ax.scatter(t_data, var_data, 0.1)
    line = ax.plot(t_data, var_data, linewidth = 0.5)
 
-   ax.plot(x_pts, y_pts, markersize = 0, linewidth =  0.5)
+   # ax.plot(x_pts, y_pts, markersize = 0, linewidth =  0.5)
    
    ax.xaxis.set_major_locator(xLocators[0])
    ax.xaxis.set_minor_locator(xLocators[1])

@@ -29,6 +29,27 @@ class Fields:
             self.faceB[:,:,:,0] += Bx
             self.faceB[:,:,:,1] += By
             self.faceB[:,:,:,2] += Bz
+         elif B_type == "rand":
+            Bx_min = config.getfloat("magnetic_field", "rand_Bx_min")
+            Bx_max = config.getfloat("magnetic_field", "rand_Bx_max")
+            By_min = config.getfloat("magnetic_field", "rand_By_min")
+            By_max = config.getfloat("magnetic_field", "rand_By_max")
+            Bz_min = config.getfloat("magnetic_field", "rand_Bz_min")
+            Bz_max = config.getfloat("magnetic_field", "rand_Bz_max")
+            
+            if dims.oneV is True:
+               By_min = By_max = Bz_min = Bz_max = 0
+
+            if dims.dy == 1 and dims.dz == 1:
+               Bx_min = (Bx_min + Bx_max)/2
+               Bx_max = Bx_min
+               
+            Bx = rng.uniform(-Bx_min, Bx_max, dims.dim_scalar)
+            By = rng.uniform(-By_min, By_max, dims.dim_scalar)
+            Bz = rng.uniform(-Bz_min, Bz_max, dims.dim_scalar)
+            
+            self.faceB += np.stack((Bx,By,Bz), axis = -1)
+      
       apply_boundaries_fields(self.faceB, dims)
       
       self.update_fields(pops, dims)
@@ -66,7 +87,7 @@ class Fields:
             Ey = rng.uniform(-Ey_min, Ey_max, dims.dim_scalar)
             Ez = rng.uniform(-Ez_min, Ez_max, dims.dim_scalar)
             
-            self.nodeE = np.stack((Ex,Ey,Ez), axis = -1)
+            self.nodeE += np.stack((Ex,Ey,Ez), axis = -1)
       
       apply_boundaries_fields(self.nodeE, dims)
 

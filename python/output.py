@@ -26,7 +26,8 @@ def save_data(path, fields, pops, dims):
          (pop.name + "_nodeN", pop.nodeN[:,:,:]),
          (pop.name + "_cellJx", pop.cellJi[:,:,:,0]),
          (pop.name + "_cellJy", pop.cellJi[:,:,:,1]),
-         (pop.name + "_cellJz", pop.cellJi[:,:,:,2])
+         (pop.name + "_cellJz", pop.cellJi[:,:,:,2]),
+         (pop.name + "_nodeT", pop.nodeT[:,:,:])
       ]
       field_dataset_list += sub_list
    

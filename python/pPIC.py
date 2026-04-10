@@ -923,7 +923,7 @@ def compare(name, items, tol = 1e-15):
 
       print(name + str(test))
    
-def cap_dt(pops):
+def cap_dt(pops, maxB):
    # Restrict dt if necessary, or expand
    maxV = 0.0
    for pop in pops.values():
@@ -939,7 +939,6 @@ def cap_dt(pops):
    plasma_freq = math.sqrt(n_e*const.e**2/(const.m_e*const.epsilon_0))
 
    maxB = np.max(np.linalg.norm(fields.faceB, axis = -1))
-   
    electron_gyro = const.e*maxB/const.m_e
    
    dt_pf = 1/plasma_freq if plasma_freq > 0 else np.inf
@@ -947,7 +946,7 @@ def cap_dt(pops):
    dt_part = dims.dx/maxV*dt_cap
    dt_yee = 0.9999 * min([dims.dx,dims.dy,dims.dz])/const.c
    
-   if args.dt > dt_part:
+   if args.dt > dt_part and not args.unsafe:
       logger.info("Shrinking dt to prevent particles from crossing cell")
       print("Shrinking dt to prevent particles from crossing cell")
       dims.dt = dt_part
@@ -958,6 +957,12 @@ def cap_dt(pops):
    logger.info("dt*omega_pe = " + str(dims.dt*plasma_freq))
    logger.info("dt*omega_ce = " + str(dims.dt*electron_gyro))
    logger.info("dt/dt_yee = " + str(dims.dt/dt_yee))
+
+   inertial_electron = const.c/plasma_freq
+   
+   logger.newline()
+   logger.info("Plasma parameters")
+   logger.info("de = " + str(inertial_electron))
 
 if args.config == "help":
    configHelp()
@@ -1121,6 +1126,8 @@ dims = Dims(lims, dt, theta, phi, sizes, period, not config.getboolean("main", "
 
 save_steps = config.getint("simulation", "save_steps", fallback = 1)
 
+sparse = config.getboolean("main", "use_sparse_matrices", fallback = False)
+
 if args.test is not None:
    test_interpolators(args.test)
 
@@ -1140,6 +1147,7 @@ timer_list = [
    'lorentz',
    'extra',
    'output',
+   'step',
    'total'
 ]
 
@@ -1171,18 +1179,49 @@ if __name__ == '__main__':
    )
 
    fields = Fields(pops, B_types, E_types, config, rng, dims)
+   
+   cap_dt(pops, fields)
 
-   cap_dt(pops)
-
+   logger.newline()
+   logger.info("Domain dimensions")
+   logger.info("xmin = " + str(dims.x_min))
+   logger.info("xmax = " + str(dims.x_max))
+   logger.info("ymin = " + str(dims.y_min))
+   logger.info("ymax = " + str(dims.y_max))
+   logger.info("zmin = " + str(dims.z_min))
+   logger.info("zmax = " + str(dims.z_max))
+   logger.info("dx = " + str(dims.dx))
+   logger.info("dy = " + str(dims.dy))
+   logger.info("dz = " + str(dims.dz))
+   logger.info("x_size = " + str(dims.x_size))
+   logger.info("y_size = " + str(dims.y_size))
+   logger.info("z_size = " + str(dims.z_size))
+   
+   logger.newline()
+   logger.info("Population parameters")
+   for name,pop in pops.items():
+      dens,gyro_f,gyro_r,inertial,meanV,vth,temp = pop.getParams(fields, dims)
+      
+      logger.newline()
+      logger.info("Population " + name)
+      logger.info("num. density = " + str(dens))
+      logger.info("gyro freq = " + str(gyro_f))
+      logger.info("gyro rad = " + str(gyro_r))
+      logger.info("di = " + str(inertial))
+      logger.info("mean V = " + str(meanV))
+      logger.info("vth = " + str(vth))
+      logger.info("temp = " + str(temp))
+   
    logger.newline()
    for name,pop in pops.items():
       if pop.static is False:
          logger.info("Uncentering particles of population " + name)
          moveParticles(pop, -dims.dt*(1-dims.phi), dims)
          # pop.sort()
-   
-   row,col = compute_mass_matrices_coo_njit_rowCol(dims)
-   # row,col = compute_mass_matrices_coo_njit_alt2_rowCol(dims)
+
+   if sparse:
+      row,col = compute_mass_matrices_coo_njit_rowCol(dims)
+      # row,col = compute_mass_matrices_coo_njit_alt2_rowCol(dims)
          
    timers.toc("init")
    
@@ -1201,95 +1240,104 @@ if __name__ == '__main__':
    print("")
    print("Starting iterations")
    for jj in range(1, args.steps + 1):
+      timers.tic("step")
       logger.newline()
       logger.info("Starting time step " + str(jj))
       if jj%args.cmdline_step == 0:
          print("Starting time step " + str(jj))
-      
-      timers.tic("locs")
 
       logger.info("Moving particles")
+      timers.tic("locs")
+
       for pop in pops.values():
          if pop.static is False:
             moveParticles(pop, dims.dt, dims)
             # pop.sort()
             
       timers.toc("locs")
+      logger.info("Calculating alpha \"rotation\" matrices")
       timers.tic("alpha")
       timers.tic("field solver")
 
-      logger.info("Calculating alpha \"rotation\" matrices")
       for pop in pops.values():
          compute_alpha(pop, fields.faceB, dims)
 
       timers.toc("alpha")
+      logger.info("Computing rotated current")
       timers.tic("current")
 
-      logger.info("Computing rotated current")
       nodeJ_hat = np.zeros(dims.dim_vector)
       for pop in pops.values():
          if pop.static is False:
             nodeJ_hat += compute_rotated_current(pop, dims)
 
       timers.toc("current")
+      logger.info("Computing mass matrices")
       timers.tic("mass matrices")
 
-      logger.info("Computing mass matrices")
-      # if dims.oneV:
-      #    mass_matrices = np.zeros((1,1,dims.Ncells_total,dims.Ncells_total))
-      # else:
-      #    mass_matrices = np.zeros((3,3,dims.Ncells_total,dims.Ncells_total))
-      
-      # for pop in pops.values():
-      #    if pop.static is False:
-      #       mass_matrices += compute_mass_matrices_njit(
-      #          pop.r, pop.alpha, pop.m, pop.q, pop.w, dims)
+      if sparse:
+         if oneV:
+            block_shape = (dims.Ncells_total,dims.Ncells_total)
+         else:
+            block_shape = (3*dims.Ncells_total,3*dims.Ncells_total)
 
-      # if dims.oneV:
-      #    mass_matrices = mass_matrices[0,0]
-      # else:
-      #    mass_matrices = mass_matrices.transpose((2,1,3,0)).reshape(3*dims.Ncells_total,3*dims.Ncells_total)
+         mass_matrices_coo = sp.sparse.csr_array(block_shape, dtype = np.float64)
 
-      if oneV:
-         block_shape = (dims.Ncells_total,dims.Ncells_total)
+         for pop in pops.values():
+            if pop.static is False:
+               # dat,row,col = compute_mass_matrices_coo(pop, dims)
+               dat = compute_mass_matrices_coo_njit(
+                  pop.r, pop.alpha, pop.m, pop.q, pop.w, dims)
+
+               # dat = compute_mass_matrices_coo_njit_alt2(
+               #    pop.r, pop.alpha, pop.cids, pop.m, pop.q, pop.w, dims)
+
+               tmp = sp.sparse.coo_array((dat,(row,col)), shape = block_shape)
+               tmp.sum_duplicates()
+               tmp = tmp.tocsr()
+               mass_matrices_coo += tmp
+
+         mass_matrices_coo.sum_duplicates()
       else:
-         block_shape = (3*dims.Ncells_total,3*dims.Ncells_total)
+         if dims.oneV:
+            mass_matrices = np.zeros((1,1,dims.Ncells_total,dims.Ncells_total))
+         else:
+            mass_matrices = np.zeros((3,3,dims.Ncells_total,dims.Ncells_total))
 
-      mass_matrices_coo = sp.sparse.csr_array(block_shape, dtype = np.float64)
-         
-      for pop in pops.values():
-         if pop.static is False:
-            # dat,row,col = compute_mass_matrices_coo(pop, dims)
-            dat = compute_mass_matrices_coo_njit(
-               pop.r, pop.alpha, pop.m, pop.q, pop.w, dims)
+         for pop in pops.values():
+            if pop.static is False:
+               mass_matrices += compute_mass_matrices_njit(
+                  pop.r, pop.alpha, pop.m, pop.q, pop.w, dims)
 
-            # dat = compute_mass_matrices_coo_njit_alt2(
-            #    pop.r, pop.alpha, pop.cids, pop.m, pop.q, pop.w, dims)
-            
-            tmp = sp.sparse.coo_array((dat,(row,col)), shape = block_shape)
-            tmp.sum_duplicates()
-            tmp = tmp.tocsr()
-            mass_matrices_coo += tmp
-
-      mass_matrices_coo.sum_duplicates()
+         if dims.oneV:
+            mass_matrices = mass_matrices[0,0]
+         else:
+            mass_matrices = mass_matrices.transpose((2,1,3,0)).reshape(3*dims.Ncells_total,3*dims.Ncells_total)
             
       timers.toc("mass matrices")
       timers.tic("maxwell")
 
       logger.info("Solving Maxwell's equations")
+      logger.info("   building b-vector for gmres")
 
       timers.tic("build b")
-      
-      # b = build_b(fields.faceB, fields.nodeE, nodeJ_hat, mass_matrices)
-      b_coo = build_b(fields.faceB, fields.nodeE, nodeJ_hat, mass_matrices_coo)
+
+      if sparse:
+         b = build_b(fields.faceB, fields.nodeE, nodeJ_hat, mass_matrices_coo)
+      else:
+         b = build_b(fields.faceB, fields.nodeE, nodeJ_hat, mass_matrices)
       
       timers.toc("build b")
+      logger.info("   building A-matrix for gmres")
       timers.tic("build A")
       
-      # A = build_A(mass_matrices)
-      A_coo = build_A_coo(mass_matrices_coo)
+      if sparse:
+         A = build_A_coo(mass_matrices_coo)
+      else:
+         A = build_A(mass_matrices)
       
       timers.toc("build A")
+      logger.info("   solving gmres")      
       timers.tic("gmres")
       
       info = 1
@@ -1303,8 +1351,8 @@ if __name__ == '__main__':
       
       while info > 0 and rtol < 1e-2 and atol < 1e-2:
          
-         # xnext,info = gmres(A, b, rtol = rtol, atol = atol, x0 = x0)
-         xnext,info = gmres(A_coo, b_coo, rtol = rtol, atol = atol, x0 = x0)
+         xnext,info = gmres(A, b, rtol = rtol, atol = atol, x0 = x0)
+         
          if info > 0:
             logger.info("GMRES tolerance failure on step " + str(jj) + ", reducing tolerance")
             if not tolerance_error:
@@ -1339,6 +1387,7 @@ if __name__ == '__main__':
 
       timers.toc("maxwell")
       timers.toc("field solver")
+      logger.info("Accelerating particles")
       timers.tic("lorentz")
 
       for pop in pops.values():
@@ -1366,23 +1415,18 @@ if __name__ == '__main__':
          
          timers.toc("output")
 
+      timers.toc("step")
+
    logger.newline()
    logger.info("Saving final state")
-   
-   timers.tic("extra")
-   
+
    for pop in pops.values():
       accumulators(pop, dims)
       calcNodeData(pop, dims)
    fields.update_fields(pops, dims)
-   
-   timers.toc("extra")
-   timers.tic("output")
-   
+
    save_data(args.out_dir, fields, pops, dims)
-   
-   timers.toc("output")
-         
+
    timers.toc("total")
 
    logger.newline()
@@ -1396,7 +1440,8 @@ if __name__ == '__main__':
 
    print("")
    print("Time per timestep and cell [ms/(cell timestep)]:")
-                    
+
+   print("Total:                " + floatToStr(1000*timers.mean("step", 1)/dims.Ncells_total, decimals = 3))
    print("Particle locs update: " + floatToStr(1000*timers.mean("locs", 1)/dims.Ncells_total, decimals = 3))
    print("Alpha Computation:    " + floatToStr(1000*timers.mean("alpha", 1)/dims.Ncells_total, decimals = 3))
    print("Current Accumulation: " + floatToStr(1000*timers.mean("current", 1)/dims.Ncells_total, decimals = 3))

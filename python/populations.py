@@ -51,10 +51,7 @@ class Pop:
       self.cids = np.empty((0,), dtype = np.float64)
       
       if Np > 0:
-         if dims.oneV:
-            vth = math.sqrt(const.k*T/self.m)
-         else:
-            vth = math.sqrt(3*const.k*T/self.m)
+         vth = math.sqrt(const.k*T/self.m)
          uniform_injector(self, Np, vth, v, rng, dims)
       
       accumulators(self, dims)
@@ -73,6 +70,37 @@ class Pop:
       self.cids = self.cids[cellid_argsort]
       self.r = self.r[cellid_argsort]
       self.v = self.v[cellid_argsort]
+
+   def getParams(self, fields, dims):
+      # Compute the average population parameters
+      Nparts = self.Np*self.w
+      
+      dens = Nparts/(dims.Ncells_total*dims.dV)
+      meanB_mag = np.mean(np.linalg.norm(fields.faceB, axis = -1))
+      meanB = np.mean(fields.faceB, axis = (0,1,2))
+      if all(meanB == 0.0):
+         unitB = np.array([1,0,0])
+      else:
+         unitB = meanB/np.linalg.norm(meanB)
+      
+      omega_p = math.sqrt(dens*self.q**2/(self.m*const.epsilon_0))
+      gyro_f = self.q*meanB_mag/self.m
+      
+      meanV = (self.w*self.v).sum(axis = 0)/Nparts
+
+      meanV_perp = (self.w*np.linalg.norm(self.v - (self.v@meanB)[:,np.newaxis]*unitB, axis = 1)).sum()/Nparts
+
+      gyro_r = meanV_perp/gyro_f
+
+      inertial = const.c/omega_p
+      
+      vth = np.sqrt((self.w*(self.v - meanV)**2).sum()/Nparts)
+      if dims.oneV:
+         temp = vth**2*self.m/const.k
+      else:
+         temp = vth**2*self.m/(3*const.k)
+
+      return dens,gyro_f,gyro_r,inertial,meanV,vth,temp
       
 def uniform_injector(pop, Np, vth, v, rng, dims):
    # Inject Np particles between xmin and xmax, bulk velocity v, and thermal velocity vth
@@ -242,10 +270,11 @@ def Lorentz(pop, midNodeE, dims):
    #    pop.v[ii] = new_v
 
 def calcNodeData(pop, dims):
-   # Computes bulk velocity and density at nodes
+   # Computes bulk velocity, density, and temperature at nodes
    pop.nodeU = np.zeros(dims.dim_vector)
    pop.nodeN = np.zeros(dims.dim_scalar)
-
+   pop.nodeT = np.zeros(dims.dim_scalar)
+   
    (x_ind,y_ind,z_ind),(x_w,y_w,z_w) = CIC_weights_node(pop.r, dims)
    
    v = np.transpose(pop.v)
@@ -286,7 +315,38 @@ def calcNodeData(pop, dims):
    
    pop.nodeU /= pop.nodeN[:,:,:,np.newaxis]
    pop.nodeN *= pop.w/dims.dV
+   
+   if dims.oneV is True:
+      w = x_w.reshape(2,-1)
 
+      v_0 = (v[0] - pop.nodeU[z_ind[0],y_ind[0],x_ind,0])**2
+
+      v_0 *= w
+      
+      np.add.at(pop.nodeT, (z_ind[0],y_ind[0],x_ind[0]), v_0[0])
+      np.add.at(pop.nodeT, (z_ind[0],y_ind[0],x_ind[1]), v_0[1])
+   else:
+      w = z_w*y_w*x_w
+
+      x_ind_alt = x_ind.reshape(1,1,2,-1)
+      y_ind_alt = y_ind.reshape(1,2,1,-1)
+      z_ind_alt = z_ind.reshape(2,1,1,-1)
+      
+      v_nn = np.sum((pop.v - pop.nodeU[z_ind_alt,y_ind_alt,x_ind_alt])**2, axis = -1)
+
+      v_nn *= w
+      
+      np.add.at(pop.nodeT, (z_ind[0],y_ind[0],x_ind[0]), v_nn[0,0,0])
+      np.add.at(pop.nodeT, (z_ind[0],y_ind[0],x_ind[1]), v_nn[0,0,1])
+      np.add.at(pop.nodeT, (z_ind[0],y_ind[1],x_ind[0]), v_nn[0,1,0])
+      np.add.at(pop.nodeT, (z_ind[0],y_ind[1],x_ind[1]), v_nn[0,1,1])
+      np.add.at(pop.nodeT, (z_ind[1],y_ind[0],x_ind[0]), v_nn[1,0,0])
+      np.add.at(pop.nodeT, (z_ind[1],y_ind[0],x_ind[1]), v_nn[1,0,1])
+      np.add.at(pop.nodeT, (z_ind[1],y_ind[1],x_ind[0]), v_nn[1,1,0])
+      np.add.at(pop.nodeT, (z_ind[1],y_ind[1],x_ind[1]), v_nn[1,1,1])
+   
+      pop.nodeT *= pop.m/const.k
+   
 def compute_rotated_current(pop, dims):
    # Computes current due to B-rotation
    # Current is stored at nodes to match E
@@ -1144,7 +1204,7 @@ def compute_rotated_current_njit(pop_r, pop_v, pop_alpha, q, w, dims):
 
    return nodeJ
 
-@njit(cache = True)#, fastmath = True)
+@njit(cache = True, fastmath = True)
 def compute_mass_matrices_njit(pop_r, pop_alpha, m, q, w, dims):
    # Compute mass matrices
    if dims.oneV:
@@ -1223,7 +1283,7 @@ def compute_mass_matrices_njit(pop_r, pop_alpha, m, q, w, dims):
 
    return M
 
-@njit(cache = True)#, fastmath = True)
+@njit(cache = True, fastmath = True)
 def compute_mass_matrices_coo_njit_alt(pop_r, pop_alpha, m, q, w, dims):
    # Compute mass matrices as coo matrices
    if dims.oneV:
@@ -1307,7 +1367,7 @@ def compute_mass_matrices_coo_njit_alt(pop_r, pop_alpha, m, q, w, dims):
    return data_M,rows_M,cols_M
 
 @ftools.lru_cache(maxsize = 128)
-@njit(cache = True)#, fastmath = True)
+@njit(cache = True, fastmath = True)
 def compute_mass_matrices_coo_njit_rowCol(dims):
    # Returns row and column indices for mass matrices coo matrices
    if dims.oneV:
@@ -1357,7 +1417,7 @@ def compute_mass_matrices_coo_njit_rowCol(dims):
    
    return rows_M,cols_M   
 
-@njit(cache = True)#, fastmath = True)
+@njit(cache = True, fastmath = True)
 def compute_mass_matrices_coo_njit(pop_r, pop_alpha, m, q, w, dims):
    # Compute mass matrices as coo matrices
    if dims.oneV:
@@ -1403,7 +1463,7 @@ def compute_mass_matrices_coo_njit(pop_r, pop_alpha, m, q, w, dims):
    return data_M
 
 @ftools.lru_cache(maxsize = 128)
-@njit(cache = True)#, fastmath = True)
+@njit(cache = True, fastmath = True)
 def compute_mass_matrices_coo_njit_alt2_rowCol(dims):
    # Returns row and column indices for mass matrices coo matrices alt2
    if dims.oneV:
@@ -1461,7 +1521,7 @@ def compute_mass_matrices_coo_njit_alt2_rowCol(dims):
    
    return rows_M,cols_M
 
-@njit(cache = True)#, fastmath = True)
+@njit(cache = True, fastmath = True)
 def compute_mass_matrices_coo_njit_alt2(pop_r, pop_alpha, pop_cids, m, q, w, dims):
    # Compute mass matrices as coo matrices
    if dims.oneV:
