@@ -1,4 +1,4 @@
-# Module of interpolators
+# Module of alternative interpolators
 import math
 import numpy as np
 import functools as ftools
@@ -9,487 +9,8 @@ from numpy import int64,float64
 
 from indexers import arr_shift,arr_diff,split_axis,arr_shift_njit,arr_diff_njit,CIC_weights_node,CIC_weights_cell,get_index,get_index_njit,numba_ravel_multi_index
 
-def face2cell(face_data, dims):
-   # Interpolates data from cell faces to centre
-   # Data is assumed to be vector data
-   xface_data,yface_data,zface_data = split_axis(face_data, axis = 3)
-   
-   cell_data = face_data.copy()
-   
-   cell_data[:,:,:,0] += arr_shift(xface_data, -1, 2, dims.period)
-   cell_data[:,:,:,1] += arr_shift(yface_data, -1, 1, dims.period)
-   cell_data[:,:,:,2] += arr_shift(zface_data, -1, 0, dims.period)
-   
-   cell_data *= 0.5
-   
-   return cell_data
-
-@njit(cache = True, fastmath = True)
-def face2cell_njit(face_data, dims):
-   # Interpolates data from cell faces to centre
-   # Data is assumed to be vector data
-   cell_data = face_data.copy()
-   
-   xshift_x = arr_shift_njit(face_data[:,:,:,0], -1, 2, dims.period)
-   yshift_y = arr_shift_njit(face_data[:,:,:,1], -1, 1, dims.period)
-   zshift_z = arr_shift_njit(face_data[:,:,:,2], -1, 0, dims.period)
-   
-   for kk in range(dims.z_size):
-      for jj in range(dims.y_size):
-         for ii in range(dims.x_size):
-            cell_data[kk,jj,ii,0] += xshift_x[kk,jj,ii]
-            cell_data[kk,jj,ii,1] += yshift_y[kk,jj,ii]
-            cell_data[kk,jj,ii,2] += zshift_z[kk,jj,ii]
-   
-   cell_data *= 0.5
-   
-   return cell_data
-
-@njit(cache = True, fastmath = True)
-def face2cell_njit_alt(face_data, dims):
-   # Interpolates data from cell faces to centre
-   # Data is assumed to be vector data
-   dim_vector = (dims.dim_vector[0],dims.dim_vector[1],
-                 dims.dim_vector[2],dims.dim_vector[3])
-   cell_data = np.empty(dim_vector, dtype = float64)
-   
-   shift = np.array([[0,0,0], [0,0,1], [0,1,0], [1,0,0]], dtype = int64)
-   
-   for kk in range(dims.z_size):
-      for jj in range(dims.y_size):
-         for ii in range(dims.x_size):
-            base_node = np.array((kk,jj,ii), dtype = int64)
-            shift_indices = get_index_njit(base_node, shift, dims)
-            sub_data = np.empty((shift.shape[0],3), dtype = float64)
-            for nn,curr_ind in enumerate(shift_indices):
-               sub_data[nn] = face_data[curr_ind[0],curr_ind[1],curr_ind[2]]
-
-            cell_data[kk,jj,ii,0] = sub_data[0,0] + sub_data[1,0]
-            cell_data[kk,jj,ii,1] = sub_data[0,1] + sub_data[2,1]
-            cell_data[kk,jj,ii,2] = sub_data[0,2] + sub_data[3,2]
-   
-   cell_data *= 0.5
-   
-   return cell_data
-
-def cell2node(cell_data, dims):
-   # Interpolates data from cell centres to nodes
-   node_data = cell_data.copy()
-   
-   shift_x = arr_shift(cell_data, 1, 2, dims.period)
-   shift_y = arr_shift(cell_data, 1, 1, dims.period)
-   shift_z = arr_shift(cell_data, 1, 0, dims.period)
-   shift_zx = arr_shift(shift_z, 1, 2, dims.period)
-   shift_xy = arr_shift(shift_x, 1, 1, dims.period)
-   shift_yz = arr_shift(shift_y, 1, 0, dims.period)
-   shift_xyz = arr_shift(shift_xy, 1, 0, dims.period)
-   
-   node_data += shift_x
-   node_data += shift_y
-   node_data += shift_z
-   node_data += shift_zx
-   node_data += shift_xy
-   node_data += shift_yz
-   node_data += shift_xyz
-   
-   node_data *= 0.125
-
-   return node_data
-
-@njit(cache = True, fastmath = True)
-def cell2node_njit(cell_data, dims):
-   # Interpolates data from cell centres to nodes
-   node_data = cell_data.copy()
-   
-   shift_x = arr_shift_njit(cell_data, 1, 2, dims.period)
-   shift_y = arr_shift_njit(cell_data, 1, 1, dims.period)
-   shift_z = arr_shift_njit(cell_data, 1, 0, dims.period)
-   shift_zx = arr_shift_njit(shift_z, 1, 2, dims.period)
-   shift_xy = arr_shift_njit(shift_x, 1, 1, dims.period)
-   shift_yz = arr_shift_njit(shift_y, 1, 0, dims.period)
-   shift_xyz = arr_shift_njit(shift_xy, 1, 0, dims.period)
-   
-   for kk in range(dims.z_size):
-      for jj in range(dims.y_size):
-         for ii in range(dims.x_size):
-            node_data[kk,jj,ii] += shift_x[kk,jj,ii]
-            node_data[kk,jj,ii] += shift_y[kk,jj,ii]
-            node_data[kk,jj,ii] += shift_z[kk,jj,ii]
-            node_data[kk,jj,ii] += shift_zx[kk,jj,ii]
-            node_data[kk,jj,ii] += shift_xy[kk,jj,ii]
-            node_data[kk,jj,ii] += shift_yz[kk,jj,ii]
-            node_data[kk,jj,ii] += shift_xyz[kk,jj,ii]
-   
-   node_data *= 0.125
-
-   return node_data
-
-@njit(cache = True, fastmath = True)
-def cell2node_njit_alt(cell_data, dims):
-   # Interpolates data from cell centres to nodes
-   if cell_data.ndim == 3:
-      dim_var = (dims.dim_scalar[0],dims.dim_scalar[1],dims.dim_scalar[2])
-   elif cell_data.ndim == 4:
-      dim_var = (dims.dim_vector[0],dims.dim_vector[1],
-                 dims.dim_vector[2],dims.dim_vector[3]) 
-   node_data = np.zeros(dim_var, dtype = float64)
-   
-   shift = np.array([[0,0,0], [0,0,-1], [0,-1,0], [0,-1,-1],
-                     [-1,0,0], [-1,0,-1], [-1,-1,0], [-1,-1,-1]],
-                    dtype = int64)
-   
-   for kk in range(dims.z_size):
-      for jj in range(dims.y_size):
-         for ii in range(dims.x_size):
-            base_node = np.array((kk,jj,ii), dtype = int64)
-            shift_indices = get_index_njit(base_node, shift, dims)
-            for nn,curr_ind in enumerate(shift_indices):
-               node_data[kk,jj,ii] += cell_data[curr_ind[0],curr_ind[1],curr_ind[2]]
-   
-   node_data *= 0.125
-
-   return node_data
-
-def face2node(face_data, dims):
-   # Interpolate face data to node
-   # Data is assumed to be vector data, face data only stores one component each
-   node_data = face_data.copy()
-   
-   xface_data,yface_data,zface_data = split_axis(face_data, axis = 3)
-
-   xshift_y = arr_shift(xface_data, 1, 1, dims.period)
-   xshift_z = arr_shift(xface_data, 1, 0, dims.period)
-   xshift_yz = arr_shift(xshift_y, 1, 0, dims.period)
-
-   yshift_z = arr_shift(yface_data, 1, 0, dims.period)
-   yshift_x = arr_shift(yface_data, 1, 2, dims.period)
-   yshift_zx = arr_shift(yshift_z, 1, 2, dims.period)
-
-   zshift_x = arr_shift(zface_data, 1, 2, dims.period)
-   zshift_y = arr_shift(zface_data, 1, 1, dims.period)
-   zshift_xy = arr_shift(zshift_x, 1, 1, dims.period)
-
-   node_data[:,:,:,0] += xshift_y
-   node_data[:,:,:,0] += xshift_z
-   node_data[:,:,:,0] += xshift_yz
-
-   node_data[:,:,:,1] += yshift_z
-   node_data[:,:,:,1] += yshift_x
-   node_data[:,:,:,1] += yshift_zx
-
-   node_data[:,:,:,2] += zshift_x
-   node_data[:,:,:,2] += zshift_y
-   node_data[:,:,:,2] += zshift_xy
-   
-   node_data *= 0.25
-   
-   return node_data
-
-@njit(cache = True, fastmath = True)
-def face2node_njit(face_data, dims):
-   # Interpolate face data to node
-   # Data is assumed to be vector data, face data only stores one component each
-   node_data = face_data.copy()
-
-   xshift_y = arr_shift_njit(face_data[:,:,:,0], 1, 1, dims.period)
-   xshift_z = arr_shift_njit(face_data[:,:,:,0], 1, 0, dims.period)
-   xshift_yz = arr_shift_njit(xshift_y, 1, 0, dims.period)
-
-   yshift_z = arr_shift_njit(face_data[:,:,:,1], 1, 0, dims.period)
-   yshift_x = arr_shift_njit(face_data[:,:,:,1], 1, 2, dims.period)
-   yshift_zx = arr_shift_njit(yshift_z, 1, 2, dims.period)
-   
-   zshift_x = arr_shift_njit(face_data[:,:,:,2], 1, 2, dims.period)
-   zshift_y = arr_shift_njit(face_data[:,:,:,2], 1, 1, dims.period)
-   zshift_xy = arr_shift_njit(zshift_x, 1, 1, dims.period)
-
-   for kk in range(dims.z_size):
-      for jj in range(dims.y_size):
-         for ii in range(dims.x_size):   
-            node_data[kk,jj,ii,0] += xshift_y[kk,jj,ii]
-            node_data[kk,jj,ii,0] += xshift_z[kk,jj,ii]
-            node_data[kk,jj,ii,0] += xshift_yz[kk,jj,ii]
-            
-            node_data[kk,jj,ii,1] += yshift_z[kk,jj,ii]
-            node_data[kk,jj,ii,1] += yshift_x[kk,jj,ii]
-            node_data[kk,jj,ii,1] += yshift_zx[kk,jj,ii]
-            
-            node_data[kk,jj,ii,2] += zshift_x[kk,jj,ii]
-            node_data[kk,jj,ii,2] += zshift_y[kk,jj,ii]
-            node_data[kk,jj,ii,2] += zshift_xy[kk,jj,ii]
-   
-   node_data *= 0.25
-   
-   return node_data
-
-@njit(cache = True, fastmath = True)
-def face2node_njit_alt(face_data, dims):
-   # Interpolate face data to node
-   # Data is assumed to be vector data, face data only stores one component each
-   dim_vector = (dims.dim_vector[0],dims.dim_vector[1],
-                 dims.dim_vector[2],dims.dim_vector[3])
-   node_data = np.empty(dim_vector, dtype = float64)
-
-   shift = np.array([[0,0,0], [0,0,-1], [0,-1,0], [0,-1,-1],
-                     [-1,0,0], [-1,0,-1], [-1,-1,0]], dtype = int64)
-
-   for kk in range(dims.z_size):
-      for jj in range(dims.y_size):
-         for ii in range(dims.x_size):
-            base_node = np.array((kk,jj,ii), dtype = int64)
-            shift_indices = get_index_njit(base_node, shift, dims)
-            sub_data = np.empty((shift.shape[0],3), dtype = float64)
-            for nn,curr_ind in enumerate(shift_indices):
-               sub_data[nn] = face_data[curr_ind[0],curr_ind[1],curr_ind[2]]
-
-            node_data[kk,jj,ii,0] = sub_data[0,0] + sub_data[2,0] + sub_data[4,0] + sub_data[6,0]
-            node_data[kk,jj,ii,1] = sub_data[0,1] + sub_data[1,1] + sub_data[4,1] + sub_data[5,1]
-            node_data[kk,jj,ii,2] = sub_data[0,2] + sub_data[1,2] + sub_data[2,2] + sub_data[3,2]
-            
-   node_data *= 0.25
-   
-   return node_data
-
-def node2cell(node_data, dims):
-   # Interpolate node data to cell centres
-   cell_data = node_data.copy()
-   
-   shift_x = arr_shift(node_data, -1, 2, dims.period)
-   shift_y = arr_shift(node_data, -1, 1, dims.period)
-   shift_z = arr_shift(node_data, -1, 0, dims.period)
-   shift_zx = arr_shift(shift_z, -1, 2, dims.period)
-   shift_xy = arr_shift(shift_x, -1, 1, dims.period)
-   shift_yz = arr_shift(shift_y, -1, 0, dims.period)
-   shift_xyz = arr_shift(shift_xy, -1, 0, dims.period)
-
-   cell_data += shift_x
-   cell_data += shift_y
-   cell_data += shift_z
-   cell_data += shift_zx
-   cell_data += shift_xy
-   cell_data += shift_yz
-   cell_data += shift_xyz
-   
-   cell_data *= 0.125
-   
-   return cell_data
-
-@njit(cache = True, fastmath = True)
-def node2cell_njit(node_data, dims):
-   # Interpolate node data to cell centres
-   cell_data = node_data.copy()
-   
-   shift_x = arr_shift_njit(node_data, -1, 2, dims.period)
-   shift_y = arr_shift_njit(node_data, -1, 1, dims.period)
-   shift_z = arr_shift_njit(node_data, -1, 0, dims.period)
-   shift_zx = arr_shift_njit(shift_z, -1, 2, dims.period)
-   shift_xy = arr_shift_njit(shift_x, -1, 1, dims.period)
-   shift_yz = arr_shift_njit(shift_y, -1, 0, dims.period)
-   shift_xyz = arr_shift_njit(shift_xy, -1, 0, dims.period)
-   
-   for kk in range(dims.z_size):
-      for jj in range(dims.y_size):
-         for ii in range(dims.x_size):
-            cell_data[kk,jj,ii] += shift_x[kk,jj,ii]
-            cell_data[kk,jj,ii] += shift_y[kk,jj,ii]
-            cell_data[kk,jj,ii] += shift_z[kk,jj,ii]
-            cell_data[kk,jj,ii] += shift_zx[kk,jj,ii]
-            cell_data[kk,jj,ii] += shift_xy[kk,jj,ii]
-            cell_data[kk,jj,ii] += shift_yz[kk,jj,ii]
-            cell_data[kk,jj,ii] += shift_xyz[kk,jj,ii]
-   
-   cell_data *= 0.125
-   
-   return cell_data
-
-@njit(cache = True, fastmath = True)
-def node2cell_njit_alt(node_data, dims):
-   # Interpolate node data to cell centres
-   if node_data.ndim == 3:
-      dim_var = (dims.dim_scalar[0],dims.dim_scalar[1],dims.dim_scalar[2])
-   elif node_data.ndim == 4:
-      dim_var = (dims.dim_vector[0],dims.dim_vector[1],
-                 dims.dim_vector[2],dims.dim_vector[3]) 
-   cell_data = np.zeros(dim_var, dtype = float64)
-
-   shift = np.array([[0,0,0], [0,0,1], [0,1,0], [0,1,1],
-                     [1,0,0], [1,0,1], [1,1,0], [1,1,1]], dtype = int64)
-
-   for kk in range(dims.z_size):
-      for jj in range(dims.y_size):
-         for ii in range(dims.x_size):
-            base_node = np.array((kk,jj,ii), dtype = int64)
-            shift_indices = get_index_njit(base_node, shift, dims)
-            for nn,curr_ind in enumerate(shift_indices):
-               cell_data[kk,jj,ii] += node_data[curr_ind[0],curr_ind[1],curr_ind[2]]
-   
-   cell_data *= 0.125
-   
-   return cell_data
-
-def node2face(node_data, dims):
-   # Interpolate node data to face
-   # Data is assumed to be vector data, face data only stores one component each
-   face_data = node_data.copy()
-   
-   xnode_data,ynode_data,znode_data = split_axis(node_data, axis = 3)
-   
-   xshift_y = arr_shift(xnode_data, -1, 1, dims.period)
-   xshift_z = arr_shift(xnode_data, -1, 0, dims.period)
-   xshift_yz = arr_shift(xshift_y, -1, 0, dims.period)
-
-   yshift_z = arr_shift(ynode_data, -1, 0, dims.period)
-   yshift_x = arr_shift(ynode_data, -1, 2, dims.period)
-   yshift_zx = arr_shift(yshift_z, -1, 2, dims.period)
-
-   zshift_x = arr_shift(znode_data, -1, 2, dims.period)
-   zshift_y = arr_shift(znode_data, -1, 1, dims.period)
-   zshift_xy = arr_shift(zshift_x, -1, 1, dims.period)
-   
-   face_data[:,:,:,0] += xshift_y
-   face_data[:,:,:,0] += xshift_z
-   face_data[:,:,:,0] += xshift_yz
-   
-   face_data[:,:,:,1] += yshift_z
-   face_data[:,:,:,1] += yshift_x
-   face_data[:,:,:,1] += yshift_zx
-   
-   face_data[:,:,:,2] += zshift_x
-   face_data[:,:,:,2] += zshift_y
-   face_data[:,:,:,2] += zshift_xy
-   
-   face_data *= 0.25
-   
-   return face_data
-
-@njit(cache = True, fastmath = True)
-def node2face_njit(node_data, dims):
-   # Interpolate node data to face
-   # Data is assumed to be vector data, face data only stores one component each
-   face_data = node_data.copy()
-   
-   xshift_y = arr_shift_njit(node_data[:,:,:,0], -1, 1, dims.period)
-   xshift_z = arr_shift_njit(node_data[:,:,:,0], -1, 0, dims.period)
-   xshift_yz = arr_shift_njit(xshift_y, -1, 0, dims.period)
-   
-   yshift_z = arr_shift_njit(node_data[:,:,:,1], -1, 0, dims.period)
-   yshift_x = arr_shift_njit(node_data[:,:,:,1], -1, 2, dims.period)
-   yshift_zx = arr_shift_njit(yshift_z, -1, 2, dims.period)
-   
-   zshift_x = arr_shift_njit(node_data[:,:,:,2], -1, 2, dims.period)
-   zshift_y = arr_shift_njit(node_data[:,:,:,2], -1, 1, dims.period)
-   zshift_xy = arr_shift_njit(zshift_x, -1, 1, dims.period)
-   
-   for kk in range(dims.z_size):
-      for jj in range(dims.y_size):
-         for ii in range(dims.x_size):
-            face_data[kk,jj,ii,0] += xshift_y[kk,jj,ii]
-            face_data[kk,jj,ii,0] += xshift_z[kk,jj,ii]
-            face_data[kk,jj,ii,0] += xshift_yz[kk,jj,ii]
-            
-            face_data[kk,jj,ii,1] += yshift_z[kk,jj,ii]
-            face_data[kk,jj,ii,1] += yshift_x[kk,jj,ii]
-            face_data[kk,jj,ii,1] += yshift_zx[kk,jj,ii]
-            
-            face_data[kk,jj,ii,2] += zshift_x[kk,jj,ii]
-            face_data[kk,jj,ii,2] += zshift_y[kk,jj,ii]
-            face_data[kk,jj,ii,2] += zshift_xy[kk,jj,ii]
-   
-   face_data *= 0.25
-   
-   return face_data
-
-@njit(cache = True, fastmath = True)
-def node2face_njit_alt(node_data, dims):
-   # Interpolate node data to face
-   # Data is assumed to be vector data, face data only stores one component each
-   dim_vector = (dims.dim_vector[0],dims.dim_vector[1],
-                 dims.dim_vector[2],dims.dim_vector[3])
-   face_data = np.empty(dim_vector, dtype = float64)
-
-   shift = np.array([[0,0,0], [0,0,1], [0,1,0], [0,1,1],
-                     [1,0,0], [1,0,1], [1,1,0]], dtype = int64)
-
-   for kk in range(dims.z_size):
-      for jj in range(dims.y_size):
-         for ii in range(dims.x_size):
-            base_node = np.array((kk,jj,ii), dtype = int64)
-            shift_indices = get_index_njit(base_node, shift, dims)
-            sub_data = np.empty((shift.shape[0],3), dtype = float64)
-            for nn,curr_ind in enumerate(shift_indices):
-               sub_data[nn] = node_data[curr_ind[0],curr_ind[1],curr_ind[2]]
-
-            face_data[kk,jj,ii,0] = sub_data[0,0] + sub_data[2,0] + sub_data[4,0] + sub_data[6,0]
-            face_data[kk,jj,ii,1] = sub_data[0,1] + sub_data[1,1] + sub_data[4,1] + sub_data[5,1]
-            face_data[kk,jj,ii,2] = sub_data[0,2] + sub_data[1,2] + sub_data[2,2] + sub_data[3,2]
-   
-   face_data *= 0.25
-   
-   return face_data
-
-def cell2face(cell_data, dims):
-   # Interpolates data from cell centres to faces
-   # Data is assumed to be vector data, face data only stores one component each
-   face_data = cell_data.copy()
-
-   face_data[:,:,:,0] += arr_shift(cell_data[:,:,:,0], 1, 2, dims.period)
-   face_data[:,:,:,1] += arr_shift(cell_data[:,:,:,1], 1, 1, dims.period)
-   face_data[:,:,:,2] += arr_shift(cell_data[:,:,:,2], 1, 0, dims.period)
-   
-   face_data *= 0.5
-   
-   return face_data
-
-@njit(cache = True, fastmath = True)
-def cell2face_njit(cell_data, dims):
-   # Interpolates data from cell centres to faces
-   # Data is assumed to be vector data, face data only stores one component each
-   face_data = cell_data.copy()
-
-   xshift_x = arr_shift_njit(cell_data[:,:,:,0], 1, 2, dims.period)
-   yshift_y = arr_shift_njit(cell_data[:,:,:,1], 1, 1, dims.period)
-   zshift_z = arr_shift_njit(cell_data[:,:,:,2], 1, 0, dims.period)
-
-   for kk in range(dims.z_size):
-      for jj in range(dims.y_size):
-         for ii in range(dims.x_size):
-            face_data[kk,jj,ii,0] += xshift_x[kk,jj,ii]
-            face_data[kk,jj,ii,1] += yshift_y[kk,jj,ii]
-            face_data[kk,jj,ii,2] += zshift_z[kk,jj,ii]
-   
-   face_data *= 0.5
-   
-   return face_data
-
-@njit(cache = True, fastmath = True)
-def cell2face_njit_alt(cell_data, dims):
-   # Interpolates data from cell centres to faces
-   # Data is assumed to be vector data, face data only stores one component each
-   dim_vector = (dims.dim_vector[0],dims.dim_vector[1],
-                 dims.dim_vector[2],dims.dim_vector[3])
-   face_data = np.empty(dim_vector, dtype = float64)
-
-   shift = np.array([[0,0,0], [0,0,-1], [0,-1,0], [-1,0,0]], dtype = int64)
-
-   for kk in range(dims.z_size):
-      for jj in range(dims.y_size):
-         for ii in range(dims.x_size):
-            base_node = np.array((kk,jj,ii), dtype = int64)
-            shift_indices = get_index_njit(base_node, shift, dims)
-            sub_data = np.empty((shift.shape[0],3), dtype = float64)
-            for nn,curr_ind in enumerate(shift_indices):
-               sub_data[nn] = cell_data[curr_ind[0],curr_ind[1],curr_ind[2]]
-
-            face_data[kk,jj,ii,0] = sub_data[0,0] + sub_data[1,0]
-            face_data[kk,jj,ii,1] = sub_data[0,1] + sub_data[2,1]
-            face_data[kk,jj,ii,2] = sub_data[0,2] + sub_data[3,2]
-   
-   face_data *= 0.5
-   
-   return face_data
-
-def face2r(face_data, r, dims):
-   # Interpolate face data to arbitrary position(s) r
+def face2cloud(face_data, r, dims):
+   # Interpolate face data to cloud located at arbitrary position(s) r
    # Data is assumed to be vector data, face data only stores one component each
    r = np.array(r).reshape(-1,3)
    r_data = np.zeros(r.shape)
@@ -510,8 +31,8 @@ def face2r(face_data, r, dims):
    return r_data
 
 @njit(cache = True, fastmath = True)
-def face2r_njit(face_data, r, dims):
-   # Interpolate face data to arbitrary position(s) r
+def face2cloud_njit(face_data, r, dims):
+   # Interpolate face data to cloud located at arbitrary position(s) r
    # Data is assumed to be vector data, face data only stores one component each
    if r.ndim == 1:
       r = r.reshape(-1,3)
@@ -550,8 +71,8 @@ def face2r_njit(face_data, r, dims):
    
    return r_data
 
-def node2r(node_data, r, dims):
-   # Interpolate node data to arbitrary position(s) r
+def node2cloud(node_data, r, dims):
+   # Interpolate node data to cloud located at arbitrary position(s) r
    r = np.array(r).reshape(-1,3)
    vec = (node_data.ndim == 4)
    
@@ -560,54 +81,86 @@ def node2r(node_data, r, dims):
    else:
       r_data = np.zeros(r.shape[0])
    
-   if dims.linear:
-      (x_ind,y_ind,z_ind),(x_w,y_w,z_w) = CIC_weights_node(r, dims, True, True)
-      weights = x_w*y_w*z_w
+   x_ind0 = np.round((r[:,0] - dims.x_min)/dims.dx).astype(int)
+   y_ind0 = np.round((r[:,1] - dims.y_min)/dims.dy).astype(int)
+   z_ind0 = np.round((r[:,2] - dims.z_min)/dims.dz).astype(int)
+   
+   x0 = x_ind0*dims.dx + dims.x_min
+   y0 = y_ind0*dims.dy + dims.y_min
+   z0 = z_ind0*dims.dz + dims.z_min
+
+   r_x = (r[:,0] - x0)/dims.dx
+   r_y = (r[:,1] - y0)/dims.dy
+   r_z = (r[:,2] - z0)/dims.dz
+
+   x_ind = np.array((x_ind0 - 1, x_ind0, x_ind0 + 1))
+   y_ind = np.array((y_ind0 - 1, y_ind0, y_ind0 + 1))
+   z_ind = np.array((z_ind0 - 1, z_ind0, z_ind0 + 1))
+   
+   if dims.period[2]:
+      x_ind = np.mod(x_ind, dims.x_size)
    else:
-      (x_ind,y_ind,z_ind),(x_w,y_w,z_w) = CIC_weights_node(r, dims, False, False)
-      weights = np.array([[x_w[1],y_w[1],z_w[1]],[x_w[0],y_w[1],z_w[1]],
-                          [x_w[1],y_w[0],z_w[1]],[x_w[0],y_w[0],z_w[1]],
-                          [x_w[1],y_w[1],z_w[0]],[x_w[0],y_w[1],z_w[0]],
-                          [x_w[1],y_w[0],z_w[0]],[x_w[0],y_w[0],z_w[0]]])
-      weights = np.linalg.norm(weights, axis = 1)
-      with np.errstate(divide = 'raise'):
-         # Deal with rare distance == 0 case
-         # Usually distance will not be 0 so use try block to
-         # attempt normal way first to prevent this from slowing the code
-         try:
-            weights = 1/weights
-         except FloatingPointError:
-            for ii in range(r.shape[0]):
-               try:
-                  weights[:,ii] = 1/weights[:,ii]
-               except FloatingPointError:
-                  min_index = np.argmin(weights[:,ii])
-                  weights[:,ii] = np.zeros(8)
-                  weights[min_index,ii] = 1
-      weights /= np.sum(weights, axis = 0)
+      x_ind = np.clip(x_ind, 0, dims.x_size - 1)
+   
+   if dims.period[1]:
+      y_ind = np.mod(y_ind, dims.y_size)
+   else:
+      y_ind = np.clip(y_ind, 0, dims.y_size - 1)
+   
+   if dims.period[0]:
+      z_ind = np.mod(z_ind, dims.z_size)
+   else:
+      z_ind = np.clip(z_ind, 0, dims.z_size - 1)
+
+   x_w = np.array((0.5*(0.5-r_x)**2, 0.75-r_x**2, 0.5*(0.5+r_x)**2))
+   y_w = np.array((0.5*(0.5-r_y)**2, 0.75-r_y**2, 0.5*(0.5+r_y)**2))
+   z_w = np.array((0.5*(0.5-r_z)**2, 0.75-r_z**2, 0.5*(0.5+r_z)**2))
+
+   x_w = x_w.reshape(1,1,3,-1)
+   y_w = y_w.reshape(1,3,1,-1)
+   z_w = z_w.reshape(3,1,1,-1)
+   
+   weights = x_w*y_w*z_w
    
    if vec:
-      weights = weights.reshape(2,2,2,-1,1)
-   else:
-      weights = weights.reshape(2,2,2,-1)
-   
+      weights = weights[:,:,:,:,np.newaxis]
+
    r_data += weights[0,0,0]*node_data[z_ind[0], y_ind[0], x_ind[0]]
    r_data += weights[0,0,1]*node_data[z_ind[0], y_ind[0], x_ind[1]]
+   r_data += weights[0,0,2]*node_data[z_ind[0], y_ind[0], x_ind[2]]
    r_data += weights[0,1,0]*node_data[z_ind[0], y_ind[1], x_ind[0]]
    r_data += weights[0,1,1]*node_data[z_ind[0], y_ind[1], x_ind[1]]
+   r_data += weights[0,1,2]*node_data[z_ind[0], y_ind[1], x_ind[2]]
+   r_data += weights[0,2,0]*node_data[z_ind[0], y_ind[2], x_ind[0]]
+   r_data += weights[0,2,1]*node_data[z_ind[0], y_ind[2], x_ind[1]]
+   r_data += weights[0,2,2]*node_data[z_ind[0], y_ind[2], x_ind[2]]
    r_data += weights[1,0,0]*node_data[z_ind[1], y_ind[0], x_ind[0]]
    r_data += weights[1,0,1]*node_data[z_ind[1], y_ind[0], x_ind[1]]
+   r_data += weights[1,0,2]*node_data[z_ind[1], y_ind[0], x_ind[2]]
    r_data += weights[1,1,0]*node_data[z_ind[1], y_ind[1], x_ind[0]]
    r_data += weights[1,1,1]*node_data[z_ind[1], y_ind[1], x_ind[1]]
-
+   r_data += weights[1,1,2]*node_data[z_ind[1], y_ind[1], x_ind[2]]
+   r_data += weights[1,2,0]*node_data[z_ind[1], y_ind[2], x_ind[0]]
+   r_data += weights[1,2,1]*node_data[z_ind[1], y_ind[2], x_ind[1]]
+   r_data += weights[1,2,2]*node_data[z_ind[1], y_ind[2], x_ind[2]]
+   r_data += weights[2,0,0]*node_data[z_ind[2], y_ind[0], x_ind[0]]
+   r_data += weights[2,0,1]*node_data[z_ind[2], y_ind[0], x_ind[1]]
+   r_data += weights[2,0,2]*node_data[z_ind[2], y_ind[0], x_ind[2]]
+   r_data += weights[2,1,0]*node_data[z_ind[2], y_ind[1], x_ind[0]]
+   r_data += weights[2,1,1]*node_data[z_ind[2], y_ind[1], x_ind[1]]
+   r_data += weights[2,1,2]*node_data[z_ind[2], y_ind[1], x_ind[2]]
+   r_data += weights[2,2,0]*node_data[z_ind[2], y_ind[2], x_ind[0]]
+   r_data += weights[2,2,1]*node_data[z_ind[2], y_ind[2], x_ind[1]]
+   r_data += weights[2,2,2]*node_data[z_ind[2], y_ind[2], x_ind[2]]
+   
    if r.shape[0] == 1:
       r_data = r_data.reshape(3)
    
    return r_data
 
 @njit(cache = True, fastmath = True)
-def node2r_njit(node_data, r, dims):
-   # Interpolate node data to arbitrary position(s) r
+def node2cloud_njit(node_data, r, dims):
+   # Interpolate node data to cloud located at arbitrary position(s) r
    if r.ndim == 1:
       r = r.reshape(-1,3)
    vec = (node_data.ndim == 4)
@@ -685,10 +238,8 @@ def node2r_njit(node_data, r, dims):
    
    return r_data
 
-def cell2r(cell_data, r, dims):
-   # Interpolate cell data to arbitrary position(s) r
-   # Interpolation is by default trilinear
-   # if linear is False then uses weighted average of euclidean distanc
+def cell2cloud(cell_data, r, dims):
+   # Interpolate cell data to cloud located at arbitrary position(s) r
    r = np.array(r).reshape(-1,3)
    vec = (cell_data.ndim == 4)
    
@@ -747,10 +298,8 @@ def cell2r(cell_data, r, dims):
    return r_data
 
 @njit(cache = True, fastmath = True)
-def cell2r_njit(cell_data, r, dims):
-   # Interpolate cell data to arbitrary position(s) r
-   # Interpolation is by default trilinear
-   # if linear is False then uses weighted average of euclidean distance
+def cell2cloud_njit(cell_data, r, dims):
+   # Interpolate cell data to cloud located at arbitrary position(s) r
    if r.ndim == 1:
       r = r.reshape(-1,3)
    vec = (cell_data.ndim == 4)

@@ -1,15 +1,16 @@
 import numpy as np
 
-from interpolators import cell2face,face2node,cell2face_njit,face2node_njit
-from populations import calcNodeData
+from interpolators import cell2face,face2node,cell2face_njit,face2node_njit,div_face2cell,div_node2cell
 
 class Fields:
    # Class contains:
-   # cellJp:    cell total particle current
-   # faceJp:    face total particle current
-   # faceB:     face magnetic fields
-   # nodeB:     node magnetic fields
-   # nodeE:     node electric field
+   # cellJp: cell total particle current
+   # faceJp: face total particle current
+   # faceB:  face magnetic fields
+   # nodeB:  node magnetic fields
+   # nodeE:  node electric field
+   # divB:   cell magnetic field divergence
+   # divE:   cell electric field divergence
    def __init__(self, pops, B_types, E_types, config, rng, dims):
       # Initialise all fields
       print("")
@@ -104,6 +105,9 @@ class Fields:
 
       self.nodeB = face2node(self.faceB, dims)
       apply_boundaries_fields(self.nodeB, dims)
+
+      self.divB = div_face2cell(self.faceB, dims)
+      self.divE = div_node2cell(self.nodeE, dims)
 
 def upwind_fields(fields, xnext, dims):
    # Upwind fields given solution to Ax = b

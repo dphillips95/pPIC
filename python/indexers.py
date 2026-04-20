@@ -29,7 +29,7 @@ def get_index(initial, relative_step, dims):
 
    return new_ind
 
-@njit(cache = True)#, fastmath = True)
+@njit(cache = True, fastmath = True)
 def get_index_njit(initial, relative_step, dims):
    # Find index starting from initial index with relative step away
    # e.g. if index is (4,5,1) and relative_step is (0,0,2), return (4,5,3)
@@ -48,7 +48,7 @@ def get_index_njit(initial, relative_step, dims):
    
    return new_ind
 
-@njit(cache = True)#, fastmath = True)
+@njit(cache = True, fastmath = True)
 def numba_clip(arr, min_val, max_val):
    # Numba-compatible version of np.clip
    shape = arr.shape
@@ -674,7 +674,76 @@ def CIC_weights_cell(r, dims, reshape = True, fraction = True):
    return (x_ind,y_ind,z_ind),(x_w,y_w,z_w)
 
 @njit(cache = True, fastmath = True)
-def CIC_weights_node_njit(r, dims, reshape = True, fraction = True):
+def CIC_weights_node_1D_njit(r, dims, fraction = True):
+   # Calculate CIC weights and interpolation nodes for given population
+   # CIC weight is fractional volume of particle cloud intersecting
+   # with each given node 'volume'
+   # here volume means cell-sized box centred on node
+   # Assumes grid is node (or face)
+   # If reshape is True then reshapes x_w etc. so that x_w*y_w*z_w works
+   # If fraction is True then x_w etc. returned as fraction of distance
+   # between points, else returns real distance from point
+   x_ind0 = math.floor((r[0] - dims.x_min)/dims.dx)
+   
+   x0 = x_ind0*dims.dx + dims.x_min
+   
+   if fraction:
+      x_w1 = (r[0] - x0)/dims.dx
+      
+      x_w0 = 1 - x_w1
+   else:
+      x_w1 = r[0] - x0
+      
+      x_w0 = dims.dx - x_w1
+   
+   x_ind1 = x_ind0 + 1
+   
+   x_ind = np.array((x_ind0,x_ind1))
+   
+   if dims.period[2]:
+      x_ind = np.mod(x_ind, dims.x_size)
+   else:
+      x_ind = numba_clip(x_ind, 0, dims.x_size - 1)
+   
+   x_w = np.array((x_w0,x_w1))
+   
+   return x_ind,x_w
+
+@njit(cache = True, fastmath = True)
+def CIC_weights_cell_1D_njit(r, dims, fraction = True):
+   # Calculate CIC weights and interpolation cells for given population
+   # CIC weight is fractional volume of particle cloud intersecting
+   # with each given cell volume
+   # Assumes grid is cell
+   # If fraction is True then x_w etc. returned as fraction of distance
+   # between points, else returns real distance from point
+   x_ind1 = round((r[0] - dims.x_min)/dims.dx)
+   
+   x0 = (x_ind1 - 1 + 0.5)*dims.dx + dims.x_min
+   if fraction:
+      x_w1 = (r[0] - x0)/dims.dx
+      
+      x_w0 = 1 - x_w1
+   else:
+      x_w1 = r[0] - x0
+      
+      x_w0 = dims.dx - x_w1
+   
+   x_ind0 = x_ind1 - 1
+   
+   x_ind = np.array((x_ind0,x_ind1))
+   
+   if dims.period[2]:
+      x_ind = np.mod(x_ind, dims.x_size)
+   else:
+      x_ind = numba_clip(x_ind, 0, dims.x_size - 1)
+   
+   x_w = np.array((x_w0,x_w1))
+   
+   return x_ind,x_w
+
+@njit(cache = True, fastmath = True)
+def CIC_weights_node_3D_njit(r, dims, fraction = True):
    # Calculate CIC weights and interpolation nodes for given population
    # CIC weight is fractional volume of particle cloud intersecting
    # with each given node 'volume'
@@ -735,13 +804,18 @@ def CIC_weights_node_njit(r, dims, reshape = True, fraction = True):
    y_w = np.array((y_w0,y_w1))
    z_w = np.array((z_w0,z_w1))
 
+   x_w = x_w.reshape(1,1,2)
+   y_w = y_w.reshape(1,2,1)
+   z_w = z_w.reshape(2,1,1)
+   
+   weights = x_w*y_w*z_w
+   
    ind = np.stack((x_ind,y_ind,z_ind))
-   weights = np.stack((x_w,y_w,z_w))
    
    return ind,weights
 
 @njit(cache = True, fastmath = True)
-def CIC_weights_cell_njit(r, dims, reshape = True, fraction = True):
+def CIC_weights_cell_3D_njit(r, dims, fraction = True):
    # Calculate CIC weights and interpolation cells for given population
    # CIC weight is fractional volume of particle cloud intersecting
    # with each given cell volume
@@ -800,7 +874,12 @@ def CIC_weights_cell_njit(r, dims, reshape = True, fraction = True):
    y_w = np.array((y_w0,y_w1))
    z_w = np.array((z_w0,z_w1))
 
+   x_w = x_w.reshape(1,1,2)
+   y_w = y_w.reshape(1,2,1)
+   z_w = z_w.reshape(2,1,1)
+   
+   weights = x_w*y_w*z_w
+   
    ind = np.stack((x_ind,y_ind,z_ind))
-   weights = np.stack((x_w,y_w,z_w))
    
    return ind,weights

@@ -22,12 +22,12 @@ parser.add_argument("-c", "--Ncores", help = "Number of CPU threads",
                     type = int, default = 1)
 parser.add_argument("-w", "--Whistler", type = int,
                     help = "Plot whistler and ion cyclotron mode exact solutions; 1 = hybrid solution, 2 = full solution")
-parser.add_argument("-g", "--gyro", action = 'store_true', help = "Scale frequency to gyrofrequency and wavenumber to ion inertial length")
+parser.add_argument("-g", "--gyro", type = int, default = 0, help = "Scale frequency to gyrofrequency and wavenumber; 1 to electron inertial length, 2 to proton inertial length")
 parser.add_argument("-x", "--xZoom", type = int, default = 1,
                     help = "Zoom in x-axis by given factor towards origin")
 parser.add_argument("-y", "--yZoom", type = int, default = 1,
                     help = "Zoom in y-axis by given factor towards origin")
-parser.add_argument("-m", "--Mirror", type = int, help = "Include other regions of dispersion; 1 = -Frequency, 2 = -Wavenumber")
+parser.add_argument("-m", "--Mirror", type = int, default = 0, help = "Include other regions of dispersion; 1 = -Frequency, 2 = -Wavenumber")
 parser.add_argument("-F", "--Frequency", action = 'store_true', help = "Plot using actual frequency, not angular frequency")
 parser.add_argument("-i", "--initial", help = "Initial time step",
                     type = int, default = 0)
@@ -41,8 +41,12 @@ parser.add_argument("-P", "--Pretty", action = 'store_true',
                     help = "Prettify the plots for posters, e.g. larger text etc.")
 parser.add_argument("-d", "--Dimension", type = int, default = 0,
                     help = "Dimension direction to perform analysis in; 0 = x, 1 = y, 2 = z")
-parser.add_argument("-L", "--Logarithmic", action = 'store_true',
+parser.add_argument("-l", "--Logarithmic", action = 'store_true',
                     help = "Plot frequency and wavenumber logarithmically")
+parser.add_argument("--CFL", action = 'store_true',
+                    help = "Show CFL (dx/dt) speed")
+parser.add_argument("--joint", action = 'store_true',
+                    help = "Plot joint positive and negative polarised plots")
 parser.add_argument("vars", nargs = '*',
                     help = "Variables for which dispersion is to be plotted; include full name. Non-scalar quantities will plot all components and appropriate circularly polarised forms. Leave empty to plot all available variables.")
 args = parser.parse_args()
@@ -74,6 +78,7 @@ def doPlot():
    global v0
    global vA
    global CFL
+   global sol
    
    k = fftfreq(nx, dx)
    omega = fftfreq(nt, time_step)
@@ -86,7 +91,7 @@ def doPlot():
 
    if len(omega)%2 == 0:
       omega[-1] = -omega[-1]
-      
+   
    k = k[d1:d2]
    omega = omega[c1:c2]
 
@@ -109,37 +114,65 @@ def doPlot():
       k = np.linspace(-kmax, kmax, 1000)
       omega = np.linspace(-omegamax, omegamax, 1000)
 
-   if args.Whistler is not None:
-      if min(omega) <= ion_gyro_freq and max(omega) >= ion_gyro_freq:
-         omega = np.append(omega, ion_gyro_freq)
-      if min(omega) <= -ion_gyro_freq and max(omega) >= -ion_gyro_freq:
-         omega = np.append(omega, -ion_gyro_freq)
-      if args.Whistler == 2:
-         if min(omega) <= electron_gyro_freq and max(omega) >= electron_gyro_freq:
-            omega = np.append(omega, electron_gyro_freq)
-         if min(omega) <= -electron_gyro_freq and max(omega) >= -electron_gyro_freq:
-            omega = np.append(omega, -electron_gyro_freq)
-   
-   
-   if args.Whistler == 1:
-      whistler_right = ftools.partial(whistler, right = True, hybrid = True, kmax = kmax)
-      whistler_left = ftools.partial(whistler, right = False, hybrid = True, kmax = kmax)
-   else:
-      whistler_right = ftools.partial(whistler, right = True, hybrid = False, kmax = kmax)
-      whistler_left = ftools.partial(whistler, right = False, hybrid = False, kmax = kmax)
+   omega.sort()
+   k.sort()
 
-   if args.Ncores == 1:
-      tmp_r = map(whistler_right, omega)
-      tmp_l = map(whistler_left, omega)
-   elif __name__ == '__main__':
-      with mp.Pool(args.Ncores) as pool:
-         tmp_r = pool.map(whistler_right, omega)
-         tmp_l = pool.map(whistler_left, omega)
-   
    if args.Whistler is not None:
-      whistler_p_r = np.array(list(tmp_r))
-      whistler_p_l = np.array(list(tmp_l))
+      hyb = args.Whistler == 1
       
+      whistler_p_r = whistler(omega, right = True, hybrid = hyb, kmax = kmax)
+      whistler_p_l = whistler(omega, right = False, hybrid = hyb, kmax = kmax)
+      
+      if args.Mirror < 2:
+         k_plotmin = kmin
+      else:
+         k_plotmin = 0
+      
+      l_branches = []
+      r_branches = []
+      l_branches.append((ion_gyro_freq,kmax))
+      r_branches.append((-ion_gyro_freq,kmax))
+      if args.Whistler == 1:
+         tmp = oscillation_ion**2/ion_gyro_freq + ion_gyro_freq
+         l_branches.append((tmp,k_plotmin))
+         r_branches.append((-tmp,k_plotmin))
+      if args.Whistler == 2:
+         r_branches.append((electron_gyro_freq,kmax))
+         l_branches.append((-electron_gyro_freq,kmax))
+         
+         tmp = np.sqrt((electron_gyro_freq + ion_gyro_freq)**2/4 + oscillation_electron**2 + oscillation_ion**2)
+         r_branches.append((electron_gyro_freq - ion_gyro_freq + tmp,k_plotmin))
+         r_branches.append((electron_gyro_freq - ion_gyro_freq - tmp,k_plotmin))
+         l_branches.append((ion_gyro_freq - electron_gyro_freq + tmp,k_plotmin))
+         l_branches.append((ion_gyro_freq - electron_gyro_freq - tmp,k_plotmin))
+
+      r_omega_branches,r_k_branches = zip(*r_branches)
+      l_omega_branches,l_k_branches = zip(*l_branches)
+      
+      r_omega_branches = np.array(r_omega_branches)
+      r_k_branches = np.array(r_k_branches)
+      l_omega_branches = np.array(l_omega_branches)
+      l_k_branches = np.array(l_k_branches)
+      breakpoint()
+      for ii in range(len(r_omega_branches)):
+         tmp = r_omega_branches[ii]
+         if tmp > min(omega) and tmp < max(omega):
+            omega = np.append(omega, tmp)
+            whistler_p_r = np.append(whistler_p_r, r_k_branches[ii])
+            whistler_p_l = np.append(whistler_p_l, whistler(np.array([tmp]), right = False, hybrid = hyb, kmax = kmax))
+
+      for ii in range(len(l_omega_branches)):
+         tmp = l_omega_branches[ii]
+         if tmp > min(omega) and tmp < max(omega):
+            omega = np.append(omega, tmp)
+            whistler_p_l = np.append(whistler_p_l, l_k_branches[ii])
+            whistler_p_r = np.append(whistler_p_r, whistler(np.array([tmp]), right = True, hybrid = hyb, kmax = kmax))
+
+      sorting = omega.argsort()
+      omega = omega[sorting]
+      whistler_p_r = whistler_p_r[sorting]
+      whistler_p_l = whistler_p_l[sorting]
+   
    # if args.gyro:
    #    k *= ion_gyro_radius/(2*math.pi)
    #    omega /= ion_gyro_freq
@@ -157,11 +190,14 @@ def doPlot():
    #       whistler_p_l *= ion_gyro_radius
    #    # whistler_p_r = v0*k + whistler_p_r
    #    # whistler_p_l = v0*k + whistler_p_l
-
+   
    kFactor = 1
    omegaFactor = 1
 
-   if args.gyro:
+   if args.gyro == 1:
+      kFactor *= inertial_electron
+      omegaFactor /= electron_gyro_freq
+   elif args.gyro == 2:
       kFactor *= inertial_ion
       omegaFactor /= ion_gyro_freq
 
@@ -176,18 +212,18 @@ def doPlot():
    v0 *= omegaFactor/kFactor
    vA *= omegaFactor/kFactor
    CFL *= omegaFactor/kFactor
+   sol *= omegaFactor/kFactor
    kmin *= kFactor
    kmax *= kFactor
    omegamin *= omegaFactor
    omegamax *= omegaFactor
-      
+   
    if args.Whistler is not None:
       whistler_p_r *= kFactor
       whistler_p_l *= kFactor
    
       whistler_p_r = [x for _,x in sorted(zip(omega, whistler_p_r), key=lambda pair: pair[0])]
       whistler_p_l = [x for _,x in sorted(zip(omega, whistler_p_l), key=lambda pair: pair[0])]
-   omega = sorted(omega)
 
    if args.Ncores == 1:
       pow_data = map(ff_pow, var_data_ff)
@@ -263,14 +299,15 @@ def doPlot():
 
    for data,filename,title in zip(pow_data, filenames, titles):
       gen_plot(data, filename, title)
+   
+   if args.joint and (args.vars is None or ("faceB_yzp" in args.vars and "faceB_yzn" in args.vars)):
+      Byzp_loc = var_name_expand.index("faceB_yzp")
+      Byzn_loc = var_name_expand.index("faceB_yzn")
 
-   Byzp_loc = var_name_expand.index("faceB_yzp")
-   Byzn_loc = var_name_expand.index("faceB_yzn")
-
-   if args.Whistler is None:
-      plotter2([pow_data[Byzp_loc],pow_data[Byzn_loc]], filename = "faceB_yzpn_ff", titles = ["$B_y+iB_z$", "$B_y-iB_z$"], kLims = kLims, omegaLims = omegaLims, k = k, omega = omega, dk = dk, domega = domega)
-   else:
-      plotter2([pow_data[Byzp_loc],pow_data[Byzn_loc]], filename = "faceB_yzpn_ff", titles = ["$B_y+iB_z$", "$B_y-iB_z$"], kLims = kLims, omegaLims = omegaLims, k = k, omega = omega, dk = dk, domega = domega, whistlers = whistlers)
+      if args.Whistler is None:
+         plotter2([pow_data[Byzp_loc],pow_data[Byzn_loc]], filename = "faceB_yzpn_ff", titles = ["$B_y+iB_z$", "$B_y-iB_z$"], kLims = kLims, omegaLims = omegaLims, k = k, omega = omega, dk = dk, domega = domega)
+      else:
+         plotter2([pow_data[Byzp_loc],pow_data[Byzn_loc]], filename = "faceB_yzpn_ff", titles = ["$B_y+iB_z$", "$B_y-iB_z$"], kLims = kLims, omegaLims = omegaLims, k = k, omega = omega, dk = dk, domega = domega, whistlers = whistlers)
 
 def annotate_line(ax,line,label,end='last',position=None):
    if position is not None:
@@ -370,24 +407,40 @@ def plotter2(data, filename, titles, kLims, omegaLims, k, omega, dk, domega, whi
       # ax[i].axline([0,0], slope = v0, color='k', linestyle='dotted', linewidth=1)
       # ax[i].axline([0,0], slope = v0-vA, color='k', linestyle='dashed', linewidth=1)
       # ax[i].axline([0,0], slope = -CFL, color='r', linestyle='dashed', linewidth=2)
-      # ax[i].plot(k, k*CFL, color='r', linestyle='dashed', linewidth=2)
-      alfvenLine = ax[i].plot(k, k*(v0+vA), color='k', linestyle='dashed', linewidth=2)
-      ax[i].plot(k, k*v0, color='k', linestyle='dotted', linewidth=2)
-      ax[i].plot(k, k*(v0-vA), color='k', linestyle='dashed', linewidth=2)
-      # ax[i].plot(k, -k*CFL, color='r', linestyle='dashed', linewidth=2)
+      alfvenLine = ax[i].plot(k, k*(v0+vA), color = 'k', linestyle = 'dashed', linewidth = 2)
+      lightLine = ax[i].plot(k, k*(v0+sol), color = 'w', linestyle = 'dashed', linewidth = 2)
+      ax[i].plot(k, k*v0, color = 'k', linestyle = 'dotted', linewidth = 2)
+      ax[i].plot(k, k*(v0-vA), color = 'k', linestyle = 'dashed', linewidth = 2)
+      ax[i].plot(k, k*(v0-sol), color = 'w', linestyle = 'dashed', linewidth = 2)
+      if args.CFL:
+         CFLLine = ax[i].plot(k, k*CFL, color='r', linestyle='dashed', linewidth=1)
+         ax[i].plot(k, -k*CFL, color = 'r', linestyle = 'dashed', linewidth = 2)
       
-      if not args.gyro:
-         if args.Frequency:
-            xtickInertial_ion = 1e3/inertial_ion
-            ytickIon_gyro_freq = ion_gyro_freq/(2*math.pi)
-         else:
-            xtickInertial_ion = 2*math.pi*1e3/inertial_ion
-            ytickIon_gyro_freq = ion_gyro_freq
+      if args.Frequency:
+         xtickInertial_electron = 1e3/inertial_electron
+         ytickElectron_gyro_freq = electron_gyro_freq/(2*math.pi)
+      else:
+         xtickInertial_electron = 2*math.pi*1e3/inertial_electron
+         ytickElectron_gyro_freq = electron_gyro_freq
+      
+      e_inertialLine = ax[i].axvline(xtickInertial_electron, color='b', linestyle='dashed', linewidth=2)
+      e_gyroLine = ax[i].axhline(ytickElectron_gyro_freq, color='b', linestyle='dashed', linewidth=2)
 
-         inertialLine = ax[i].axvline(xtickInertial_ion, color='b', linestyle='dashed', linewidth=2)
-         gyroLine = ax[i].axhline(ytickIon_gyro_freq, color='b', linestyle='dashed', linewidth=2)
+      if args.Frequency:
+         xtickInertial_ion = 1e3/inertial_ion
+         ytickIon_gyro_freq = ion_gyro_freq/(2*math.pi)
+      else:
+         xtickInertial_ion = 2*math.pi*1e3/inertial_ion
+         ytickIon_gyro_freq = ion_gyro_freq
       
-      if args.gyro:
+      i_inertialLine = ax[i].axvline(xtickInertial_ion, color='b', linestyle='dashed', linewidth=2)
+      i_gyroLine = ax[i].axhline(ytickIon_gyro_freq, color='b', linestyle='dashed', linewidth=2)
+
+      if args.gyro == 1:
+         ax[i].set_xlabel('$kd_e$')
+         if i == 0:
+            ax[i].set_ylabel('$\omega/\omega_e$')
+      elif args.gyro == 2:
          ax[i].set_xlabel('$kd_i$')
          if i == 0:
             ax[i].set_ylabel('$\omega/\omega_i$')
@@ -409,7 +462,7 @@ def plotter2(data, filename, titles, kLims, omegaLims, k, omega, dk, domega, whi
          ax[i].plot(-whistlers[1,:], omega - v0*whistlers[1,:], color = 'k', linestyle = 'dotted', linewidth = 2)
          
       if args.Logarithmic:
-         if args.Mirror is None:
+         if args.Mirror == 0:
             ax[i].set_xscale('log')
             ax[i].set_yscale('log')
          elif args.Mirror == 1:
@@ -421,29 +474,47 @@ def plotter2(data, filename, titles, kLims, omegaLims, k, omega, dk, domega, whi
 
       ax[i].set_xbound(kLims)
       ax[i].set_ybound(omegaLims)
-      if args.gyro or not args.Logarithmic:
+      if args.gyro != 0 or not args.Logarithmic:
          ax[i].set_box_aspect(1.0)
       else:
          ax[i].set(aspect = 'equal')
 
-      if not args.gyro:
-         if kLims[0] <= xtickInertial_ion and kLims[1] >= xtickInertial_ion:
-            ax[i].annotate("$d_i$", xy=(xtickInertial_ion,0), xytext=(-6,-15), color=inertialLine.get_color(),
-                           xycoords = ax[i].get_xaxis_transform(), textcoords="offset points", size = 20, va="center")
-            annotate_line(ax[i], line = inertialLine, label = "$d_i$",
-                          end = 'last')
-         if omegaLims[0] <= ytickIon_gyro_freq and omegaLims[1] >= ytickIon_gyro_freq:
-            annotate_line(ax[i], line = gyroLine, label = "$\omega_i$",
-                          end = 'first')
+      if kLims[0] <= xtickInertial_electron and kLims[1] >= xtickInertial_electron:
+         ax[i].annotate("$d_i$", xy=(xtickInertial_electron,0), xytext=(-6,-15), color=e_inertialLine.get_color(),
+                        xycoords = ax[i].get_xaxis_transform(), textcoords="offset points", size = 20, va="center")
+         annotate_line(ax[i], line = e_inertialLine, label = "$d_i$",
+                       end = 'last')
+      if omegaLims[0] <= ytickElectron_gyro_freq and omegaLims[1] >= ytickElectron_gyro_freq:
+         annotate_line(ax[i], line = e_gyroLine, label = "$\omega_i$",
+                       end = 'first')
+      
+      if kLims[0] <= xtickInertial_ion and kLims[1] >= xtickInertial_ion:
+         ax[i].annotate("$d_i$", xy=(xtickInertial_ion,0), xytext=(-6,-15), color=i_inertialLine.get_color(),
+                        xycoords = ax[i].get_xaxis_transform(), textcoords="offset points", size = 20, va="center")
+         annotate_line(ax[i], line = i_inertialLine, label = "$d_i$",
+                       end = 'last')
+      if omegaLims[0] <= ytickIon_gyro_freq and omegaLims[1] >= ytickIon_gyro_freq:
+         annotate_line(ax[i], line = i_gyroLine, label = "$\omega_i$",
+                       end = 'first')
 
       annotate_line(ax[i], line = alfvenLine[0], label = "Alfvén",
                     end = 'last')
+
+      annotate_line(ax[i], line = lightLine[0], label = "Light",
+                    end = 'last')
+      if args.CFL:
+         annotate_line(ax[i], line = CFLLine[0], label = "CFL",
+                       end = 'last')
+      
       if whistlers is not None:
          annotate_line(ax[i], line = whistlerLine[0], label = "R-mode",
                        end = 'last')
-         position = next((x,y) for x,y in zip(cycloLine[0].get_xdata(),cycloLine[0].get_ydata()) if not (x <= max(ax[i].get_xbound()) and y <= max(ax[i].get_ybound())) and not (x == float("inf") or x == float("-inf") or y == float("inf") or y == float("-inf")))
-         annotate_line(ax[i], line = cycloLine[0], label = "L-mode",
-                       position = position)
+         try:
+            position = next((x,y) for x,y in zip(cycloLine[0].get_xdata(),cycloLine[0].get_ydata()) if not (x <= max(ax[i].get_xbound()) and y <= max(ax[i].get_ybound())) and not (x == float("inf") or x == float("-inf") or y == float("inf") or y == float("-inf")))
+            annotate_line(ax[i], line = cycloLine[0], label = "L-mode",
+                          position = position)
+         except StopIteration:
+            pass
       
    cbar = fig.colorbar(col, ax=ax, aspect=40, shrink=0.5)
    cbar.set_label('Magnitude [nT]',)
@@ -469,7 +540,11 @@ def plotter(data, filename, title, kLims, omegaLims, k, omega, dk, domega, whist
                       extent = kLims + omegaLims)
    ax.title.set_text(title)
    ax.set(aspect = 'auto')
-   if args.gyro:
+   if args.gyro == 1:
+      # ax.set_xlabel('$kr_e$')
+      ax.set_xlabel('$kd_e$')
+      ax.set_ylabel('$\omega/\omega_e$')
+   elif args.gyro == 2:
       # ax.set_xlabel('$kr_i$')
       ax.set_xlabel('$kd_i$')
       ax.set_ylabel('$\omega/\omega_i$')
@@ -488,21 +563,24 @@ def plotter(data, filename, title, kLims, omegaLims, k, omega, dk, domega, whist
    # ax.axline([0,0], slope = v0, color='k', linestyle='dotted', linewidth=1)
    # ax.axline([0,0], slope = v0-vA, color='k', linestyle='dashed', linewidth=1)
    # ax.axline([0,0], slope = -CFL, color='r', linestyle='dashed', linewidth=2)
-   # ax.plot(k, k*CFL, color='r', linestyle='dashed', linewidth=2)
+   ax.plot(k, k*(v0+sol), color='w', linestyle='dashed', linewidth=1)
    ax.plot(k, k*(v0+vA), color='k', linestyle='dashed', linewidth=1)
    ax.plot(k, k*v0, color='k', linestyle='dotted', linewidth=1)
    ax.plot(k, k*(v0-vA), color='k', linestyle='dashed', linewidth=1)
-   # ax.plot(k, -k*CFL, color='r', linestyle='dashed', linewidth=2)
-
+   ax.plot(k, k*(v0-sol), color='w', linestyle='dashed', linewidth=1)
+   if args.CFL:
+      ax.plot(k, k*CFL, color='r', linestyle='dashed', linewidth=2)
+      ax.plot(k, -k*CFL, color='r', linestyle='dashed', linewidth=2)
+   
    plt.gcf().gca().tick_params(which='both',direction=tickDir,length=tickLength,width=tickWidth)
    
    if whistlers is not None:
-      ax.plot(whistlers[0,:], omega + v0*whistlers[0,:], color = 'k', linestyle = 'dotted', linewidth = 2)
-      ax.plot(whistlers[1,:], omega + v0*whistlers[1,:], color = 'k', linestyle = 'dotted', linewidth = 2)
-      ax.plot(-whistlers[0,:], omega - v0*whistlers[0,:], color = 'k', linestyle = 'dotted', linewidth = 2)
+      ax.plot(whistlers[0,:], omega + v0*whistlers[0,:], color = 'g', linestyle = 'dotted', linewidth = 2)
+      ax.plot(whistlers[1,:], omega + v0*whistlers[1,:], color = 'b', linestyle = 'dotted', linewidth = 2)
+      ax.plot(-whistlers[0,:], omega - v0*whistlers[0,:], color = 'r', linestyle = 'dotted', linewidth = 2)
       ax.plot(-whistlers[1,:], omega - v0*whistlers[1,:], color = 'k', linestyle = 'dotted', linewidth = 2)
    if args.Logarithmic:
-      if args.Mirror is None:
+      if args.Mirror == 0:
          plt.xscale('log')
          plt.yscale('log')
       elif args.Mirror == 1:
@@ -534,58 +612,42 @@ def saveFigure(fig, filePath, dpi, attempts, delay):
          print("Plot \"" + os.path.basename(filePath) + "\" generated on attempt " + str(i+1))
       break
    sys.stdout.flush()
-   
+
 def whistler(omega, right, hybrid, kmax):
-   if omega == None:
-      out = 0
-   else:
+   if omega is None:
+      return 0
+   
+   whistler = np.empty(omega.shape, dtype = np.float64)
+   with warnings.catch_warnings():
+      warnings.simplefilter("ignore")
       if hybrid:
          if right:
-            if omega == -ion_gyro_freq:
-               out = kmax
-            else:
-               # pre = omega**2 - omega*oscillation_ion**2/(omega + ion_gyro_freq) + omega*lim_electron
-               pre = omega**2*(1 + oscillation_ion**2/(ion_gyro_freq*(ion_gyro_freq + omega)))
-               if pre < 0:
-                  out = float('Inf')
-               else:
-                  out = np.sqrt(pre)/const.c
+            pre = omega**2*(1 + oscillation_ion**2/(ion_gyro_freq*(ion_gyro_freq + omega)))
+            whistler = np.sqrt(pre)/const.c
+            whistler[pre < 0] = np.inf
+            whistler[omega == -ion_gyro_freq] = kmax
          else:
-            if omega == ion_gyro_freq:
-               out = kmax
-            else:
-               # pre = omega**2 - omega*oscillation_ion**2/(omega - ion_gyro_freq) - omega*lim_electron
-               pre = omega**2*(1 + oscillation_ion**2/(ion_gyro_freq*(ion_gyro_freq - omega)))
-               if pre < 0:
-                  out = float('Inf')
-               else:
-                  out = np.sqrt(pre)/const.c
+            pre = omega**2*(1 + oscillation_ion**2/(ion_gyro_freq*(ion_gyro_freq - omega)))
+            whistler = np.sqrt(pre)/const.c
+            whistler[pre < 0] = np.inf
+            whistler[omega == ion_gyro_freq] = kmax
       else:
          if right:
-            if omega == -ion_gyro_freq or omega == electron_gyro_freq:
-               out = kmax
-            else:
-               # pre = omega**2 - omega*oscillation_ion**2/(omega + ion_gyro_freq) - omega*oscillation_electron**2/(omega - electron_gyro_freq)
-               pre = omega**2*(1 - (oscillation_ion**2 + oscillation_electron**2)/((omega + ion_gyro_freq)*(omega - electron_gyro_freq)))
-               if pre < 0:
-                  out = float('Inf')
-               else:
-                  out = np.sqrt(pre)/const.c
+            pre = omega**2*(1 - (oscillation_ion**2 + oscillation_electron**2)/((omega + ion_gyro_freq)*(omega - electron_gyro_freq)))
+            whistler = np.sqrt(pre)/const.c
+            whistler[pre < 0] = np.inf
+            whistler[omega == -ion_gyro_freq] = kmax
+            whistler[omega == electron_gyro_freq] = kmax
          else:
-            if omega == ion_gyro_freq or omega == -electron_gyro_freq:
-               out = kmax
-            else:
-               # pre = omega**2 - omega*oscillation_ion**2/(omega - ion_gyro_freq) - omega*oscillation_electron**2/(omega + electron_gyro_freq)
-               pre = omega**2*(1 - (oscillation_ion**2 + oscillation_electron**2)/((omega - ion_gyro_freq)*(omega + electron_gyro_freq)))
-               if pre < 0:
-                  out = float('Inf')
-               else:
-                  out = np.sqrt(pre)/const.c
+            pre = omega**2*(1 - (oscillation_ion**2 + oscillation_electron**2)/((omega - ion_gyro_freq)*(omega + electron_gyro_freq)))
+            whistler = np.sqrt(pre)/const.c
+            whistler[pre < 0] = np.inf
+            whistler[omega == ion_gyro_freq] = kmax
+            whistler[omega == -electron_gyro_freq] = kmax
 
-      if omega<0:
-         out *= -1
-   
-   return out
+   whistler *= (omega >= 0)*2 - 1
+         
+   return whistler
 
 def getvA(B_dat, ne_dat, t_pt):
    
@@ -659,6 +721,7 @@ def getParam(B_dat, ne_dat, n_dat, T_dat, Ue_dat = None):
    print("Electron Plasma Frequency: " + str(oscillation_electron) + " rad/s = " + str(2*math.pi/(oscillation_electron*dt)) + " dt")
    print("Ion Inertial Length: " + str(inertial_ion) + " m = " + str(inertial_ion/dx) + " dx")
    print("Electron Inertial Length: " + str(inertial_electron) + " m = " + str(inertial_electron/dx) + " dx")
+   print("")
    
    return [ion_gyro_freq, ion_gyro_radius, electron_gyro_freq,
            electron_gyro_radius, oscillation_ion, oscillation_electron,
@@ -753,9 +816,12 @@ def repeat_stack(arr, count, axis):
     return np.stack([arr for _ in range(count)], axis = axis)
 
 figDpi = 100
-figResolutionX = 1920
-figResolutionY = 960
+figResolutionX = 900
+figResolutionY = 720
 figureSize = (figResolutionX/figDpi,figResolutionY/figDpi)
+figResolutionX2 = 1920
+figResolutionY2 = 960
+figureSize2 = (figResolutionX2/figDpi,figResolutionY2/figDpi)
 if args.Pretty:
    matplotlib.rcParams.update({'font.size': 20})
 else:
@@ -765,7 +831,7 @@ tickDir = "out"
 tickLength = 2
 tickWidth = 1
 
-xr_data = xr.open_dataset("fields.nc")
+xr_data = xr.open_dataset("fields.nc", engine = "h5netcdf")
 
 var_name = set(xr_data.variables) - set(('t','x','y','z','timestep'))
 var_name = list(var_name)
@@ -786,7 +852,7 @@ xInterval = xmax - xmin
 dx = xInterval/nx # should be dx = dy = dz in rhybrid
 ncells = nx*ny*nz # total number of cells
 
-n_list = [i for i in var_name if i.endswith("_nodeN")]
+n_list = [i for i in var_name if i.endswith("_cellN")]
 species_count = len(n_list)
 
 xr_data = makeVec(xr_data)
@@ -818,6 +884,8 @@ dt = time_step
 
 CFL = dx/dt
 
+sol = const.c
+
 if args.Dimension == 0:
    av_axes = [0,1]
 elif args.Dimension == 1:
@@ -830,18 +898,18 @@ var_data = [xr_data[name] for name in var_name]
 
 var_real = [True]*len(var_name)
 
-n_list = [i for i in var_name if i.endswith("_nodeN")]
+n_list = [i for i in var_name if i.endswith("_cellN")]
 
 n_dataset = []
 v_dataset = []
 T_dataset = []
 
 for x,y in zip(var_name,var_data):
-   if x.endswith("_nodeN"):
+   if x.endswith("_cellN"):
       n_dataset.append(y)
-   elif x.endswith("_nodeU"):
+   elif x.endswith("_cellU"):
       v_dataset.append(y)
-   elif x.endswith("_nodeT"):
+   elif x.endswith("_cellT"):
       T_dataset.append(y)
 
 n_dataset = np.array(n_dataset)
@@ -936,7 +1004,28 @@ for tmp_name, tmp_data, tmp_real in zip(var_name, var_data, var_real):
       var_name_expand.append(tmp_name)
       var_data_expand.append(tmp_data)
       var_real_expand.append(tmp_real)
-      
+
+if args.vars is not None:
+   sub_name = []
+   sub_data = []
+   sub_real = []
+   for tmp_name,tmp_data,tmp_real in zip(var_name_expand,var_data_expand,var_real_expand):
+      if tmp_name in args.vars:
+         sub_name.append(tmp_name)
+         sub_data.append(tmp_data)
+         sub_real.append(tmp_real)
+
+   if len(sub_name) == 0:
+      print("No variables found matching requested variable")
+      print("Variables available:")
+      for name in var_name_expand:
+         print(name)
+      sys.exit()
+
+   var_name_expand = sub_name
+   var_data_expand = sub_data
+   var_real_expand = sub_real
+
 window = repeat_stack(np.hamming(nt), nx, 1)
 
 var_data_window = []
@@ -944,7 +1033,7 @@ var_data_window = []
 for x in var_data_expand:
    var_data_window.append(x*window)
 
-if args.Mirror is None:
+if args.Mirror == 0:
    c1 = (nt-1)//2
    c2 = nt
    if args.yZoom>1:
@@ -982,7 +1071,7 @@ for ii,x in enumerate(var_data_expand):
       var_data_expand[ii] = x.to_numpy()
    except AttributeError:
       pass
-      
+
 if args.Ncores == 1:
    var_data_ff = itools.starmap(fft_total, zip(var_data_expand, var_real_expand))
 elif __name__ == '__main__':

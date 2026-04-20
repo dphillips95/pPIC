@@ -16,18 +16,20 @@ def save_data(path, fields, pops, dims):
       ("nodeEx", fields.nodeE[:,:,:,0]),
       ("nodeEy", fields.nodeE[:,:,:,1]),
       ("nodeEz", fields.nodeE[:,:,:,2]),
+      ("divB", fields.divB),
+      ("divE", fields.divE),
    ]
 
    for pop in pops.values():
       sub_list = [
-         (pop.name + "_nodeUx", pop.nodeU[:,:,:,0]),
-         (pop.name + "_nodeUy", pop.nodeU[:,:,:,1]),
-         (pop.name + "_nodeUz", pop.nodeU[:,:,:,2]),
-         (pop.name + "_nodeN", pop.nodeN[:,:,:]),
+         (pop.name + "_cellUx", pop.cellU[:,:,:,0]),
+         (pop.name + "_cellUy", pop.cellU[:,:,:,1]),
+         (pop.name + "_cellUz", pop.cellU[:,:,:,2]),
+         (pop.name + "_cellN", pop.cellN[:,:,:]),
          (pop.name + "_cellJx", pop.cellJi[:,:,:,0]),
          (pop.name + "_cellJy", pop.cellJi[:,:,:,1]),
          (pop.name + "_cellJz", pop.cellJi[:,:,:,2]),
-         (pop.name + "_nodeT", pop.nodeT[:,:,:])
+         (pop.name + "_cellT", pop.cellT[:,:,:])
       ]
       field_dataset_list += sub_list
    

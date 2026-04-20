@@ -9,7 +9,7 @@ from numba import njit,int64,float64,guvectorize
 from numba.experimental import jitclass
 
 from interpolators import face2r,cell2r,node2r,face2r_njit,cell2r_njit,node2r_njit
-from indexers import split_axis,numba_unravel_index,CIC_weights_node,CIC_weights_cell,numba_clip,CIC_weights_node_njit,CIC_weights_cell_njit,get_particle_cellid_njit,get_index_njit
+from indexers import split_axis,numba_unravel_index,CIC_weights_node,CIC_weights_cell,numba_clip,CIC_weights_node_1D_njit,CIC_weights_cell_1D_njit,CIC_weights_node_3D_njit,CIC_weights_cell_3D_njit,get_particle_cellid_njit,get_index_njit
 
 class Pop:
    # Contents:
@@ -55,7 +55,7 @@ class Pop:
          uniform_injector(self, Np, vth, v, rng, dims)
       
       accumulators(self, dims)
-      calcNodeData(self, dims)
+      self.cellN,self.cellU,self.cellT = calcCellData(self, dims)
       
       self.static = static
 
@@ -186,7 +186,7 @@ def accumulators(pop, dims):
    # CIC weight factors
    (x_ind,y_ind,z_ind),(x_w,y_w,z_w) = CIC_weights_cell(pop.r, dims)
    w = z_w*y_w*x_w
-
+   
    np.add.at(pop.cellRhoQ, (z_ind[0],y_ind[0],x_ind[0]), w[0,0,0])
    np.add.at(pop.cellRhoQ, (z_ind[0],y_ind[0],x_ind[1]), w[0,0,1])
    np.add.at(pop.cellRhoQ, (z_ind[0],y_ind[1],x_ind[0]), w[0,1,0])
@@ -269,84 +269,94 @@ def Lorentz(pop, midNodeE, dims):
 
    #    pop.v[ii] = new_v
 
-def calcNodeData(pop, dims):
-   # Computes bulk velocity, density, and temperature at nodes
-   pop.nodeU = np.zeros(dims.dim_vector)
-   pop.nodeN = np.zeros(dims.dim_scalar)
-   pop.nodeT = np.zeros(dims.dim_scalar)
-   
-   (x_ind,y_ind,z_ind),(x_w,y_w,z_w) = CIC_weights_node(pop.r, dims)
-   
+def calcCellData(pop, dims):
+   # Computes mean density, bulk velocity, and temperature in each cell
+   cellU = np.zeros(dims.dim_vector)
+   cellN = np.zeros(dims.dim_scalar)
+   cellT = np.zeros(dims.dim_scalar)
+
+   x_ind = np.floor((pop.r[:,0] - dims.x_min)/dims.dx).astype(int)
+   y_ind = np.floor((pop.r[:,1] - dims.y_min)/dims.dy).astype(int)
+   z_ind = np.floor((pop.r[:,2] - dims.z_min)/dims.dz).astype(int)
+
    v = np.transpose(pop.v)
    
    if dims.oneV is True:
-      w = x_w.reshape(2,-1)
-
-      v_0 = v[0].copy()
+      np.add.at(cellU[:,:,:,0], (z_ind,y_ind,x_ind), v[0])
       
-      np.add.at(pop.nodeU[:,:,:,0], (z_ind[0],y_ind[0],x_ind[0]), w[0]*v_0)
-      np.add.at(pop.nodeU[:,:,:,0], (z_ind[0],y_ind[0],x_ind[1]), w[1]*v_0)
-
-      np.add.at(pop.nodeN, (z_ind[0],y_ind[0],x_ind[0]), w[0])
-      np.add.at(pop.nodeN, (z_ind[0],y_ind[0],x_ind[1]), w[1])
+      np.add.at(cellN[:,:,:,0], (z_ind,y_ind,x_ind), 1)
    else:
-      w = z_w*y_w*x_w
-
-      for nn in range(3):
-         v_nn = v[nn].copy()
-         
-         np.add.at(pop.nodeU[:,:,:,nn], (z_ind[0],y_ind[0],x_ind[0]), w[0,0,0]*v_nn)
-         np.add.at(pop.nodeU[:,:,:,nn], (z_ind[0],y_ind[0],x_ind[1]), w[0,0,1]*v_nn)
-         np.add.at(pop.nodeU[:,:,:,nn], (z_ind[0],y_ind[1],x_ind[0]), w[0,1,0]*v_nn)
-         np.add.at(pop.nodeU[:,:,:,nn], (z_ind[0],y_ind[1],x_ind[1]), w[0,1,1]*v_nn)
-         np.add.at(pop.nodeU[:,:,:,nn], (z_ind[1],y_ind[0],x_ind[0]), w[1,0,0]*v_nn)
-         np.add.at(pop.nodeU[:,:,:,nn], (z_ind[1],y_ind[0],x_ind[1]), w[1,0,1]*v_nn)
-         np.add.at(pop.nodeU[:,:,:,nn], (z_ind[1],y_ind[1],x_ind[0]), w[1,1,0]*v_nn)
-         np.add.at(pop.nodeU[:,:,:,nn], (z_ind[1],y_ind[1],x_ind[1]), w[1,1,1]*v_nn)
-
-      np.add.at(pop.nodeN, (z_ind[0],y_ind[0],x_ind[0]), w[0,0,0])
-      np.add.at(pop.nodeN, (z_ind[0],y_ind[0],x_ind[1]), w[0,0,1])
-      np.add.at(pop.nodeN, (z_ind[0],y_ind[1],x_ind[0]), w[0,1,0])
-      np.add.at(pop.nodeN, (z_ind[0],y_ind[1],x_ind[1]), w[0,1,1])
-      np.add.at(pop.nodeN, (z_ind[1],y_ind[0],x_ind[0]), w[1,0,0])
-      np.add.at(pop.nodeN, (z_ind[1],y_ind[0],x_ind[1]), w[1,0,1])
-      np.add.at(pop.nodeN, (z_ind[1],y_ind[1],x_ind[0]), w[1,1,0])
-      np.add.at(pop.nodeN, (z_ind[1],y_ind[1],x_ind[1]), w[1,1,1])
+      np.add.at(cellU, (z_ind,y_ind,x_ind), pop.v)
+      
+      np.add.at(cellN, (z_ind,y_ind,x_ind), 1)
    
-   pop.nodeU /= pop.nodeN[:,:,:,np.newaxis]
-   pop.nodeN *= pop.w/dims.dV
+   cellU /= cellN[:,:,:,np.newaxis]
+   cellN *= pop.w/dims.dV
    
    if dims.oneV is True:
-      w = x_w.reshape(2,-1)
-
-      v_0 = (v[0] - pop.nodeU[z_ind[0],y_ind[0],x_ind,0])**2
-
-      v_0 *= w
+      v_0 = (v[0] - cellU[z_ind,y_ind,x_ind,0])**2
       
-      np.add.at(pop.nodeT, (z_ind[0],y_ind[0],x_ind[0]), v_0[0])
-      np.add.at(pop.nodeT, (z_ind[0],y_ind[0],x_ind[1]), v_0[1])
+      np.add.at(cellT, (z_ind,y_ind,x_ind), v_0)
    else:
-      w = z_w*y_w*x_w
+      vth = np.sum((pop.v - cellU[z_ind,y_ind,x_ind])**2, axis = -1)/3
 
-      x_ind_alt = x_ind.reshape(1,1,2,-1)
-      y_ind_alt = y_ind.reshape(1,2,1,-1)
-      z_ind_alt = z_ind.reshape(2,1,1,-1)
-      
-      v_nn = np.sum((pop.v - pop.nodeU[z_ind_alt,y_ind_alt,x_ind_alt])**2, axis = -1)
+      np.add.at(cellT, (z_ind,y_ind,x_ind), vth)
+   
+   cellT *= pop.m/const.k
 
-      v_nn *= w
+   return cellN,cellU,cellT
+   
+@njit(cache = True, fastmath = True)
+def calcCellData_njit(pop_r, pop_v, pop_w, pop_m, dims):
+   # Computes density, bulk velocity, and temperature at cell centres
+   cellU = np.zeros(dims.dim_vector)
+   cellN = np.zeros(dims.dim_scalar)
+   cellT = np.zeros(dims.dim_scalar)
+
+   for pp in range(pop_r.shape[0]):
+      r = pop_r[pp]
+      v = pop_r[alpha]
       
-      np.add.at(pop.nodeT, (z_ind[0],y_ind[0],x_ind[0]), v_nn[0,0,0])
-      np.add.at(pop.nodeT, (z_ind[0],y_ind[0],x_ind[1]), v_nn[0,0,1])
-      np.add.at(pop.nodeT, (z_ind[0],y_ind[1],x_ind[0]), v_nn[0,1,0])
-      np.add.at(pop.nodeT, (z_ind[0],y_ind[1],x_ind[1]), v_nn[0,1,1])
-      np.add.at(pop.nodeT, (z_ind[1],y_ind[0],x_ind[0]), v_nn[1,0,0])
-      np.add.at(pop.nodeT, (z_ind[1],y_ind[0],x_ind[1]), v_nn[1,0,1])
-      np.add.at(pop.nodeT, (z_ind[1],y_ind[1],x_ind[0]), v_nn[1,1,0])
-      np.add.at(pop.nodeT, (z_ind[1],y_ind[1],x_ind[1]), v_nn[1,1,1])
+      if dims.oneV is True:
+         x_ind = math.floor((r[0] - dims.x_min)/dims.dx)
+         
+         cellU[0,0,x_ind,0] += v[0]
+         
+         cellN[0,0,x_ind] += 1
+      else:
+         x_ind = math.floor((r[0] - dims.x_min)/dims.dx)
+         y_ind = math.floor((r[1] - dims.y_min)/dims.dy)
+         z_ind = math.floor((r[2] - dims.z_min)/dims.dz)
+         
+         for nn in range(3):
+            cellU[z_ind,y_ind,x_ind,nn] += v[nn]
+         
+         cellN[z_ind,y_ind,x_ind] += 1
+
+   cellU /= cellN[:,:,:,np.newaxis]
+   cellN *= pop_w/dims.dV
    
-      pop.nodeT *= pop.m/const.k
-   
+   for pp in range(pop_r.shape[0]):
+      r = pop_r[pp]
+      v = pop_v[pp]
+
+      if dims.oneV is True:
+         x_ind = math.floor((r[0] - dims.x_min)/dims.dx)
+         
+         cellT[0,0,x_ind] += (v[0] - cellU[0,0,x_ind,0])**2
+      else:
+         x_ind = math.floor((r[0] - dims.x_min)/dims.dx)
+         y_ind = math.floor((r[1] - dims.y_min)/dims.dy)
+         z_ind = math.floor((r[2] - dims.z_min)/dims.dz)
+
+         vth = (v[0] - cellU[z_ind,y_ind,x_ind,0])**2 + (v[1] - cellU[z_ind,y_ind,x_ind,1])**2 + (v[2] - cellU[z_ind,y_ind,x_ind,2])**2
+         
+         cellT[z_ind,y_ind,x_ind] += vth/3
+         
+   cellT *= pop_w*pop_m/const.k
+
+   return cellN,cellU,cellT
+      
 def compute_rotated_current(pop, dims):
    # Computes current due to B-rotation
    # Current is stored at nodes to match E
@@ -810,9 +820,9 @@ def removeParticle_njit(pop, to_delete):
    pop.Np = np.sum(to_keep)
 
 @njit(cache = True, fastmath = True)
-def accumulators_njit(r, v, q, w, dims):
+def accumulators_njit(pop_r, pop_v, pop_q, pop_w, dims):
    # Accumulate macroparticles into cell-centred charge and current densities
-   for r,v in zip(r,v):
+   for r,v in zip(pop_r,pop_v):
       x_locs = round((r[0] - dims.x_min)/dims.dx)
       y_locs = round((r[1] - dims.y_min)/dims.dy)
       z_locs = round((r[2] - dims.z_min)/dims.dz)
@@ -896,8 +906,8 @@ def accumulators_njit(r, v, q, w, dims):
          cellJi[z_ind_r,y_ind_r,x_ind_l,nn] += w[1,1,0]*v_nn
          cellJi[z_ind_r,y_ind_r,x_ind_r,nn] += w[1,1,1]*v_nn
    
-   cellRhoQ *= q*w/dims.dV
-   cellJi *= q*w/dims.dV
+   cellRhoQ *= pop_q*pop_w/dims.dV
+   cellJi *= pop_q*pop_w/dims.dV
    
    return cellRhoQ,cellJi
 
@@ -939,15 +949,15 @@ def moveParticles_njit(pop, dstep, dims):
    apply_boundaries_parts_njit(pop, dims)
 
 @njit(cache = True, fastmath = True)
-def Lorentz_njit(r, v, alpha, q, m, midNodeE, dims):
+def Lorentz_njit(pop_r, pop_v, pop_alpha, pop_q, pop_m, midNodeE, dims):
    # Accelerate particles via Lorentz force
    rE = node2r_njit(midNodeE, r, dims)
 
-   beta = dims.phi*(q*dims.dt)/m
+   beta = dims.phi*(pop_q*dims.dt)/m
 
    new_v = np.zeros(v.shape, dtype = float64)
 
-   for ii,(r,v,alpha,E) in enumerate(zip(r,v,alpha,rE)):
+   for ii,(r,v,alpha,E) in enumerate(zip(pop_r,pop_v,pop_alpha,rE)):
       new_v[ii] = 2*alpha@(v + beta*E) - v
 
    return new_v
@@ -1129,90 +1139,108 @@ def nodeU_njit(pop, dims):
 #    return nodeJ
 
 @njit(cache = True, fastmath = True)
-def compute_rotated_current_njit(pop_r, pop_v, pop_alpha, q, w, dims):
+def compute_rotated_current_njit(pop_r, pop_v, pop_alpha, pop_q, pop_w, dims):
    # Computes current due to B-rotation
    # Current is stored at nodes to match E
    # This is accumulated directly to the nodes
-   nodeJ = np.zeros(dims.dim_vector)
+   nodeJ = np.zeros((dims.z_size,dims.y_size,dims.x_size,3), dtype = np.float64)
    
-   for r,v,alpha in zip(pop_r,pop_v,pop_alpha):
-      x_locs = np.floor((r[0] - dims.x_min)/dims.dx).astype(int)
-      y_locs = np.floor((r[1] - dims.y_min)/dims.dy).astype(int)
-      z_locs = np.floor((r[2] - dims.z_min)/dims.dz).astype(int)
-
-      x0 = x_locs*dims.dx + dims.x_min
-      y0 = y_locs*dims.dy + dims.y_min
-      z0 = z_locs*dims.dz + dims.z_min
-
-      x_w1 = (r[0] - x0)/dims.dx
-      y_w1 = (r[1] - y0)/dims.dy
-      z_w1 = (r[2] - z0)/dims.dz
-
-      x_w0 = 1 - x_w1
-      y_w0 = 1 - y_w1
-      z_w0 = 1 - z_w1
-
-      x_ind0 = x_locs
-      x_ind1 = x_locs + 1
-      if dims.period[2]:
-         x_ind1 = np.mod(x_ind1, dims.x_size)
-      else:
-         x_ind1 = np.clip(x_ind1, 0, dims.x_size - 1)
-
-      y_ind0 = y_locs
-      y_ind1 = y_locs + 1
-      if dims.period[1]:
-         y_ind1 = np.mod(y_ind1, dims.y_size)
-      else:
-         y_ind1 = np.clip(y_ind1, 0, dims.y_size - 1)
-
-      z_ind0 = z_locs
-      z_ind1 = z_locs + 1
-      if dims.period[0]:
-         z_ind1 = np.mod(z_ind1, dims.z_size)
-      else:
-         z_ind1 = np.clip(z_ind1, 0, dims.z_size - 1)
-
+   for pp in range(pop_r.shape[0]):
+      r = pop_r[pp]
+      v = pop_v[pp]
+      alpha = pop_alpha[pp]
+      
       if dims.oneV is True:
-         alpha_v = alpha@v
-
-         # (cell-centred) current density
-         nodeJ[z_ind0,y_ind0,x_ind0,:] += x_w0*alpha_v
-         nodeJ[z_ind0,y_ind0,x_ind1,:] += x_w1*alpha_v
+         x_ind,x_w = CIC_weights_node_1D_njit(r, dims)
+         
+         alpha_v = alpha[0,0]*v[0]
+         
+         # nodal current density
+         nodeJ[0,0,x_ind[0],0] += x_w[0]*alpha_v
+         nodeJ[0,0,x_ind[1],0] += x_w[1]*alpha_v
       else:
-         x_w = np.stack((x_w0,x_w1)).reshape(1,1,2,-1)
-         y_w = np.stack((y_w0,y_w1)).reshape(1,2,1,-1)
-         z_w = np.stack((z_w0,z_w1)).reshape(2,1,1,-1)
-         w = z_w*y_w*x_w
+         (x_ind,y_ind,z_ind),w = CIC_weights_node_3D_njit(r, dims)
          
          alpha_v = alpha@v
-
-         # (cell-centred) current density
+         
+         # nodal current density
          for nn in range(3):
-            alpha_v_nn = alpha_v[nn].copy()
-            
-            nodeJ[z_ind0,y_ind0,x_ind0,nn] += w[0,0,0]*alpha_v_nn
-            nodeJ[z_ind0,y_ind0,x_ind1,nn] += w[0,0,1]*alpha_v_nn
-            nodeJ[z_ind0,y_ind1,x_ind0,nn] += w[0,1,0]*alpha_v_nn
-            nodeJ[z_ind0,y_ind1,x_ind1,nn] += w[0,1,1]*alpha_v_nn
-            nodeJ[z_ind1,y_ind0,x_ind0,nn] += w[1,0,0]*alpha_v_nn
-            nodeJ[z_ind1,y_ind0,x_ind1,nn] += w[1,0,1]*alpha_v_nn
-            nodeJ[z_ind1,y_ind1,x_ind0,nn] += w[1,1,0]*alpha_v_nn
-            nodeJ[z_ind1,y_ind1,x_ind1,nn] += w[1,1,1]*alpha_v_nn
-            
-   nodeJ *= q*w/dims.dV
-
+            nodeJ[z_ind[0],y_ind[0],x_ind[0],nn] += w[0,0,0]*alpha_v[nn]
+            nodeJ[z_ind[0],y_ind[0],x_ind[1],nn] += w[0,0,1]*alpha_v[nn]
+            nodeJ[z_ind[0],y_ind[1],x_ind[0],nn] += w[0,1,0]*alpha_v[nn]
+            nodeJ[z_ind[0],y_ind[1],x_ind[1],nn] += w[0,1,1]*alpha_v[nn]
+            nodeJ[z_ind[1],y_ind[0],x_ind[0],nn] += w[1,0,0]*alpha_v[nn]
+            nodeJ[z_ind[1],y_ind[0],x_ind[1],nn] += w[1,0,1]*alpha_v[nn]
+            nodeJ[z_ind[1],y_ind[1],x_ind[0],nn] += w[1,1,0]*alpha_v[nn]
+            nodeJ[z_ind[1],y_ind[1],x_ind[1],nn] += w[1,1,1]*alpha_v[nn]
+   
+   nodeJ *= pop_q*pop_w/dims.dV
+   
    return nodeJ
 
 @njit(cache = True, fastmath = True)
-def compute_mass_matrices_njit(pop_r, pop_alpha, m, q, w, dims):
+def compute_mass_matrices_njit_alt2(pop_r, pop_alpha, pop_m, pop_q, pop_w, dims):
    # Compute mass matrices
    if dims.oneV:
       M = np.zeros((1,1,dims.Ncells_total,dims.Ncells_total))
    else:
       M = np.zeros((3,3,dims.Ncells_total,dims.Ncells_total))
 
-   for r,alpha in zip(pop_r,pop_alpha):
+   for pp in range(pop_r.shape[0]):
+      r = pop_r[pp]
+      alpha = pop_alpha[pp]
+      
+      if dims.oneV is True:
+         ind,weights = CIC_weights_node_1D_njit(r, dims)
+         for xi in ind:
+            w_xi = weights[xi]
+            for xj in ind:
+               w_xj = weights[xj]
+               M[0,0,xi,xj] += w_xi*w_xj * alpha[0,0]
+      else:
+         ind,weights = CIC_weights_node_3D_njit(r, dims)
+         ind[1:] *= dims.x_size
+         ind[2] *= dims.y_size
+         for zi in range(2):
+            i_z = ind[2][zi]
+            w_zi = weights[zi]
+            for zj in range(2):
+               j_z = ind[2][zj]
+               w_zj = weights[zj]
+               for yi in range(2):
+                  i_yz = i_z + ind[1][yi]
+                  w_yzi = w_zi[yi]
+                  for yj in range(2):
+                     j_yz = j_z + ind[1][yj]
+                     w_yzj = w_zj[yj]
+                     for xi in range(2):
+                        i_xyz = i_yz + ind[0][xi]
+                        w_xyzi = w_yzi[xi]
+                        for xj in range(2):
+                           j_xyz = j_yz + ind[0][xj]
+                           w_xyzj = w_yzj[xj]
+                           w = w_xyzi*w_xyzj
+                           for ii in range(3):
+                              for jj in range(3):
+                                 M[ii,jj,i_xyz,j_xyz] += w*alpha[ii,jj]
+   
+   beta = dims.phi*(pop_q*dims.dt)/pop_m
+   M *= beta * pop_q*pop_w/dims.dV
+
+   return M
+
+@njit(cache = True, fastmath = True)
+def compute_mass_matrices_njit(pop_r, pop_alpha, pop_m, pop_q, pop_w, dims):
+   # Compute mass matrices
+   if dims.oneV:
+      M = np.zeros((1,1,dims.Ncells_total,dims.Ncells_total))
+   else:
+      M = np.zeros((3,3,dims.Ncells_total,dims.Ncells_total))
+
+   for pp in range(pop_r.shape[0]):
+      r = pop_r[pp]
+      alpha = pop_alpha[pp]
+      
       x_locs = math.floor((r[0] - dims.x_min)/dims.dx)
       y_locs = math.floor((r[1] - dims.y_min)/dims.dy)
       z_locs = math.floor((r[2] - dims.z_min)/dims.dz)
@@ -1277,94 +1305,11 @@ def compute_mass_matrices_njit(pop_r, pop_alpha, m, q, w, dims):
                            for ii in range(3):
                               for jj in range(3):
                                  M[ii,jj,zi+yi+xi,zj+yj+xj] += x_wi*x_wj*y_wi*y_wj*z_wi*z_wj * alpha[ii,jj]
-
-   beta = dims.phi*(q*dims.dt)/m
-   M *= beta * q*w/dims.dV
+   
+   beta = dims.phi*(pop_q*dims.dt)/pop_m
+   M *= beta * pop_q*pop_w/dims.dV
 
    return M
-
-@njit(cache = True, fastmath = True)
-def compute_mass_matrices_coo_njit_alt(pop_r, pop_alpha, m, q, w, dims):
-   # Compute mass matrices as coo matrices
-   if dims.oneV:
-      data_M = np.empty((pop.Np,4,1), dtype = np.float64)
-      rows_M = np.empty((pop.Np,4,1), dtype = np.int64)
-      cols_M = np.empty((pop.Np,4,1), dtype = np.int64)
-   else:
-      data_M = np.empty((dims.Ncells_total,64,3,3), dtype = np.float64)
-      rows_M = np.empty((dims.Ncells_total,64,3,3), dtype = np.int64)
-      cols_M = np.empty((dims.Ncells_total,64,3,3), dtype = np.int64)
-   
-   for pp in range(pop.Np):
-      r = pop_r[pp]
-      index,weights = CIC_weights_node_njit(r, dims)
-      if dims.oneV:
-         alpha = pop_alpha[pp,0,0]
-         
-         for jj in range(2):
-            xi = index[0,jj]
-            x_wi = weights[0,jj]
-            for ii in range(2):
-               xj = index[0,ii]
-               x_wj = weights[0,ii]
-               
-               ind = jj*2 + ii
-
-               data_M[pp,ind] = x_wi*x_wj * alpha
-               
-               rows_M[pp,ind] = xi
-               cols_M[pp,ind] = xj
-      else:
-         alpha = pop_alpha[pp].flatten()
-         
-         x_ind = index[0]*3
-         y_ind = index[1]*3*dims.x_size
-         z_ind = index[2]*3*dims.x_size*dims.y_size
-         
-         for nn in range(2):
-            xi = x_ind[nn]
-            x_wi = weights[0][nn]
-            for mm in range(2):
-               xj = x_ind[mm]
-               x_wj = weights[0][mm]
-               for ll in range(2):
-                  yi = y_ind[ll]
-                  y_wi = weights[1][ll]
-                  for kk in range(2):
-                     yj = y_ind[kk]
-                     y_wj = weights[1][kk]
-                     for jj in range(2):
-                        zi = z_ind[jj]
-                        z_wi = weights[2][jj]
-                        for ii in range(2):
-                           zj = z_ind[ii]
-                           z_wj = weights[2][ii]
-                           
-                           ind = ((((nn*2 + mm)*2 + ll)*2 + kk)*2 + jj)*2 + ii
-                           
-                           data_M[pp,ind] = x_wi*x_wj*y_wi*y_wj*z_wi*z_wj * alpha
-                           
-                           row = zi + yi + xi
-                           col = zj + yj + xj
-
-                           rows_M[pp,ind] = np.array(
-                              [row+0,row+0,row+0,
-                               row+1,row+1,row+1,
-                               row+2,row+2,row+2])
-                           
-                           cols_M[pp,ind] = np.array(
-                              [col+0,col+1,col+2,
-                               col+0,col+1,col+2,
-                               col+0,col+1,col+2])
-         
-   data_M = data_M.flatten()
-   rows_M = rows_M.flatten()
-   cols_M = cols_M.flatten()
-                           
-   beta = dims.phi*(q*dims.dt)/m
-   data_M *= beta * q*w/dims.dV
-
-   return data_M,rows_M,cols_M
 
 @ftools.lru_cache(maxsize = 128)
 @njit(cache = True, fastmath = True)
@@ -1418,7 +1363,7 @@ def compute_mass_matrices_coo_njit_rowCol(dims):
    return rows_M,cols_M   
 
 @njit(cache = True, fastmath = True)
-def compute_mass_matrices_coo_njit(pop_r, pop_alpha, m, q, w, dims):
+def compute_mass_matrices_coo_njit(pop_r, pop_alpha, pop_m, pop_q, pop_w, dims):
    # Compute mass matrices as coo matrices
    if dims.oneV:
       data_M = np.zeros((dims.Ncells_total,2,2,1,1), dtype = np.float64)
@@ -1427,38 +1372,38 @@ def compute_mass_matrices_coo_njit(pop_r, pop_alpha, m, q, w, dims):
    
    for pp in range(pop_r.shape[0]):
       r = pop_r[pp]
-      index,weights = CIC_weights_node_njit(r, dims)
       
       if dims.oneV:
+         x_ind,x_w = CIC_weights_node_1D_njit(r, dims)
+         
          alpha = pop_alpha[pp,0,0]
-
-         weights = weights[0]
-
-         cellid = index[0,0]
+         
+         cellid = x_ind[0]
 
          for ll in range(2):
             for kk in range(2):
-               data_M[cellid,ll,kk,0,0] += weights[ll]*weights[kk]*alpha
+               data_M[cellid,ll,kk,0,0] += x_w[ll]*x_w[kk]*alpha
          
       else:
+         (x_ind,y_ind,z_ind),w = CIC_weights_node_3D_njit(r, dims)
+         
          alpha = pop_alpha[pp]
          
-         multi_weights = weights[0].reshape(1,1,2)*weights[1].reshape(1,2,1)*weights[2].reshape(2,1,1)
-
-         multi_weights = multi_weights.flatten()
+         w = w.flatten()
          
-         cellid = (index[2,0]*dims.y_size + index[1,0])*dims.x_size + index[0,0]
+         cellid = (z_ind[0]*dims.y_size + y_ind[0])*dims.x_size + x_ind[0]
 
          for ll in range(8):
             for kk in range(8):
+               w_outer = w[ll]*w[kk]
                for jj in range(3):
                   for ii in range(3):
-                     data_M[cellid,ll,kk,jj,ii] += multi_weights[ll]*multi_weights[kk]*alpha[jj,ii]
+                     data_M[cellid,ll,kk,jj,ii] += w_outer*alpha[jj,ii]
    
    data_M = data_M.flatten()
                            
-   beta = dims.phi*(q*dims.dt)/m
-   data_M *= beta * q*w/dims.dV
+   beta = dims.phi*(pop_q*dims.dt)/pop_m
+   data_M *= beta * pop_q*pop_w/dims.dV
 
    return data_M
 
@@ -1522,7 +1467,7 @@ def compute_mass_matrices_coo_njit_alt2_rowCol(dims):
    return rows_M,cols_M
 
 @njit(cache = True, fastmath = True)
-def compute_mass_matrices_coo_njit_alt2(pop_r, pop_alpha, pop_cids, m, q, w, dims):
+def compute_mass_matrices_coo_njit_alt2(pop_r, pop_alpha, pop_cids, pop_m, pop_q, pop_w, dims):
    # Compute mass matrices as coo matrices
    if dims.oneV:
       data_M = np.zeros((dims.Ncells_total,3,1,1), dtype = np.float64)
@@ -1531,18 +1476,17 @@ def compute_mass_matrices_coo_njit_alt2(pop_r, pop_alpha, pop_cids, m, q, w, dim
    
    for pp in range(pop_r.shape[0]):
       r = pop_r[pp]
-      index,weights = CIC_weights_node_njit(r, dims)
       
       if dims.oneV:
+         nodeids,x_w = CIC_weights_node_1D_njit(r, dims)
+         
          alpha = pop_alpha[pp,0,0]
          cell_loc = pop_cids[pp]
          
-         weights = weights[0]
-         
          relative_step = np.array([[0,0,0], [0,0,1]])
-
+         
          nodeids = np.array([cell_loc, cell_loc+1])
-
+         
          if dims.period[2]:
             nodeids[1] %= dims.x_size
          else:
@@ -1553,15 +1497,15 @@ def compute_mass_matrices_coo_njit_alt2(pop_r, pop_alpha, pop_cids, m, q, w, dim
                tmp = kk - ll + 1
                data_M[nodeids[ll],tmp,0,0] += weights[ll]*weights[kk]*alpha
       else:
+         nodeids,w = CIC_weights_node_3D_njit(r, dims)
+         
          alpha = pop_alpha[pp]
          cellid = pop_cids[pp]
          cell_loc = np.array([int(cellid/(dims.y_size*dims.x_size)),
                               int(cellid/dims.x_size)%dims.y_size,
                               cellid%dims.x_size])
          
-         multi_weights = weights[0].reshape(1,1,2)*weights[1].reshape(1,2,1)*weights[2].reshape(2,1,1)
-
-         multi_weights = multi_weights.flatten()
+         w = w.flatten()
          
          relative_step = np.array([[0,0,0], [0,0,1], [0,1,0], [0,1,1],
                                    [1,0,0], [1,0,1], [1,1,0], [1,1,1]], dtype = np.int64)
@@ -1575,11 +1519,68 @@ def compute_mass_matrices_coo_njit_alt2(pop_r, pop_alpha, pop_cids, m, q, w, dim
                tmp = (tmp[0]*3 + tmp[1])*3 + tmp[2]
                for jj in range(3):
                   for ii in range(3):
-                     data_M[nodeids[ll],tmp,jj,ii] += multi_weights[ll]*multi_weights[kk]*alpha[jj,ii]
-         
+                     data_M[nodeids[ll],tmp,jj,ii] += w[ll]*w[kk]*alpha[jj,ii]
+   
    data_M = data_M.flatten()
                            
-   beta = dims.phi*(q*dims.dt)/m
-   data_M *= beta * q*w/dims.dV
+   beta = dims.phi*(pop_q*dims.dt)/pop_m
+   data_M *= beta * pop_q*pop_w/dims.dV
 
    return data_M
+
+@njit(cache = True, fastmath = True)
+def compute_current_mass_matrices_coo_njit(pop_r, pop_v, pop_alpha, pop_m, pop_q, pop_w, dims):
+   # Compute rotated current, and mass matrix as coo matrix
+   nodeJ = np.zeros((dims.z_size,dims.y_size,dims.x_size,3), dtype = np.float64)   
+   if dims.oneV:
+      data_M = np.zeros((dims.Ncells_total,2,2,1,1), dtype = np.float64)
+   else:
+      data_M = np.zeros((dims.Ncells_total,8,8,3,3), dtype = np.float64)
+   
+   for pp in range(pop_r.shape[0]):
+      r = pop_r[pp]
+      v = pop_v[pp]
+      alpha = pop_alpha[pp]
+      
+      if dims.oneV:
+         x_ind,x_w = CIC_weights_node_1D_njit(r, dims)
+         
+         alpha = alpha[0,0]
+         alpha_v = alpha*v[0]
+         
+         nodeJ[0,0,x_ind[0],0] += x_w[0]*alpha_v
+         nodeJ[0,0,x_ind[1],0] += x_w[1]*alpha_v
+         
+         for ll in range(2):
+            for kk in range(2):
+               data_M[x_ind[0],ll,kk,0,0] += x_w[ll]*x_w[kk]*alpha
+
+      else:
+         (x_ind,y_ind,z_ind),w = CIC_weights_node_3D_njit(r, dims)
+         
+         alpha_v = alpha@v
+
+         for nn in range(3):
+            for kk in range(2):
+               for jj in range(2):
+                  for ii in range(2):
+                     nodeJ[z_ind[kk],y_ind[jj],x_ind[ii],nn] += w[kk,jj,ii]*alpha_v[nn]
+            
+         w = w.flatten()
+         
+         cellid = (z_ind[0]*dims.y_size + y_ind[0])*dims.x_size + x_ind[0]
+         
+         for ll in range(8):
+            for kk in range(8):
+               w_outer = w[ll]*w[kk]
+               for jj in range(3):
+                  for ii in range(3):
+                     data_M[cellid,ll,kk,jj,ii] += w_outer*alpha[jj,ii]
+      
+   data_M = data_M.flatten()
+
+   nodeJ *= pop_q*pop_w/dims.dV
+   beta = dims.phi*(pop_q*dims.dt)/pop_m
+   data_M *= beta * pop_q*pop_w/dims.dV
+
+   return nodeJ,data_M
