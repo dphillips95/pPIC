@@ -47,7 +47,7 @@ parser.add_argument("--CFL", action = 'store_true',
                     help = "Show CFL (dx/dt) speed")
 parser.add_argument("--joint", action = 'store_true',
                     help = "Plot joint positive and negative polarised plots")
-parser.add_argument("vars", nargs = '*',
+parser.add_argument("--vars", nargs = '*',
                     help = "Variables for which dispersion is to be plotted; include full name. Non-scalar quantities will plot all components and appropriate circularly polarised forms. Leave empty to plot all available variables.")
 args = parser.parse_args()
 
@@ -153,7 +153,7 @@ def doPlot():
       r_k_branches = np.array(r_k_branches)
       l_omega_branches = np.array(l_omega_branches)
       l_k_branches = np.array(l_k_branches)
-      breakpoint()
+      
       for ii in range(len(r_omega_branches)):
          tmp = r_omega_branches[ii]
          if tmp > min(omega) and tmp < max(omega):

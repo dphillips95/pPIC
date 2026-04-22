@@ -481,7 +481,14 @@ def build_b(faceB, nodeE, nodeJ_hat, mass_matrices):
    
    return b
 
-def build_A(mass_matrices):
+def build_curl():
+   # Pre-compute curl matrices
+   curl_n2f = get_operator_curl_node2face(dims)
+   curl_f2n = get_operator_curl_face2node(dims)
+
+   return curl_n2f,curl_f2n
+   
+def build_A(mass_matrices, curls):
    # Construct array A of Ax = b equation representing Maxwell's equations
    if dims.oneV:
       A = np.zeros((2*dims.Ncells_total,2*dims.Ncells_total))
@@ -495,14 +502,16 @@ def build_A(mass_matrices):
       A[dims.Ncells_total:,dims.Ncells_total:] = np.identity(dims.Ncells_total)
       A[dims.Ncells_total:,dims.Ncells_total:] += dims.dt*dims.theta*mass_matrices/const.epsilon_0
    else:
+      curl_n2f,curl_f2n = curls
+      
       A = np.zeros((6*dims.Ncells_total,6*dims.Ncells_total))
       # B-component of Faraday's Law
       A[:3*dims.Ncells_total,:3*dims.Ncells_total] = np.identity(3*dims.Ncells_total)
       # E-component of Faraday's Law
-      A[:3*dims.Ncells_total,3*dims.Ncells_total:] = get_operator_curl_node2face(dims)*dims.dt*dims.theta
+      A[:3*dims.Ncells_total,3*dims.Ncells_total:] = curl_n2f*dims.dt*dims.theta
 
       # B-component of Ampère's Law
-      A[3*dims.Ncells_total:,:3*dims.Ncells_total] = -get_operator_curl_face2node(dims)*dims.dt*dims.theta*const.c**2
+      A[3*dims.Ncells_total:,:3*dims.Ncells_total] = -curl_f2n*dims.dt*dims.theta*const.c**2
 
       # E-component of Ampère's Law
       A[3*dims.Ncells_total:,3*dims.Ncells_total:] = np.identity(3*dims.Ncells_total)
@@ -511,35 +520,21 @@ def build_A(mass_matrices):
 
    return A
 
-def build_P():
-   # Construct preconditioner array P ~= A
-   # Constructed by dropping current from A but otherwise identical
-   if dims.oneV:
-      P = np.zeros((2*dims.Ncells_total,2*dims.Ncells_total))
-      # B-component of Faraday's Law
-      P[:dims.Ncells_total,:dims.Ncells_total] = np.identity(dims.Ncells_total)
-      # E-component of Faraday's Law not present due to 1V
+def build_curl_coo():
+   # Pre-compute sparse curl matrices
+   block_shape = (3*dims.Ncells_total,3*dims.Ncells_total)
+   data,rows,cols = get_operator_coo_curl_node2face(dims)
+   curl_n2f = sp.sparse.coo_array((data,(rows,cols)), shape = block_shape)
+   
+   data,rows,cols = get_operator_coo_curl_face2node(dims)
+   curl_f2n = sp.sparse.coo_array((data,(rows,cols)), shape = block_shape)
 
-      # B-component of Ampère's Law not present due to 1V
+   curl_n2f.sum_duplicates()
+   curl_f2n.sum_duplicates()
+   
+   return curl_n2f,curl_f2n
 
-      # E-component of Ampère's Law
-      P[dims.Ncells_total:,dims.Ncells_total:] = np.identity(dims.Ncells_total)
-   else:
-      P = np.zeros((6*dims.Ncells_total,6*dims.Ncells_total))
-      # B-component of Faraday's Law
-      P[:3*dims.Ncells_total,:3*dims.Ncells_total] = np.identity(3*dims.Ncells_total)
-      # E-component of Faraday's Law
-      P[:3*dims.Ncells_total,3*dims.Ncells_total:] = get_operator_curl_node2face(dims)*dims.dt*dims.theta
-
-      # B-component of Ampère's Law
-      P[3*dims.Ncells_total:,:3*dims.Ncells_total] = -get_operator_curl_face2node(dims)*dims.dt*dims.theta*const.c**2
-
-      # E-component of Ampère's Law
-      P[3*dims.Ncells_total:,3*dims.Ncells_total:] = np.identity(3*dims.Ncells_total)
-      
-   return P
-
-def build_A_coo(mass_matrices):
+def build_A_coo(mass_matrices, curls):
    # Construct sparse coo array A of Ax = b equation representing Maxwell's equations
    if dims.oneV:
       # B-component of Faraday's Law
@@ -558,18 +553,16 @@ def build_A_coo(mass_matrices):
 
       AmpereE.sum_duplicates()
    else:
-      block_shape = (3*dims.Ncells_total,3*dims.Ncells_total)
+      curl_n2f,curl_f2n = curls
       
       # B-component of Faraday's Law
       FaradayB = sp.sparse.identity(3*dims.Ncells_total, dtype = np.float64, format = 'csr')
       
       # E-component of Faraday's Law
-      data,rows,cols = get_operator_coo_curl_node2face(dims)
-      FaradayE = sp.sparse.coo_array((data,(rows,cols)), shape = block_shape)*dims.dt*dims.theta
+      FaradayE = curl_n2f*dims.dt*dims.theta
       
       # B-component of Ampère's Law
-      data,rows,cols = get_operator_coo_curl_face2node(dims)
-      AmpereB = -sp.sparse.coo_array((data,(rows,cols)), shape = block_shape)*dims.dt*dims.theta*const.c**2
+      AmpereB = -curl_f2n*dims.dt*dims.theta*const.c**2
 
       # E-component of Ampère's Law
       AmpereE = sp.sparse.identity(3*dims.Ncells_total, dtype = np.float64, format = 'csr')
@@ -593,55 +586,6 @@ def build_A_coo(mass_matrices):
       A = A.tobsr((3,3))
    
    return A
-
-def build_P_coo():
-   # Construct sparse coo preconditioner inverse array P ~= A^-1
-   # Constructed by dropping current from A but otherwise identical
-   if dims.oneV:
-      # B-component of Faraday's Law
-      FaradayB = sp.sparse.identity(dims.Ncells_total, dtype = np.float64, format = 'csr')
-
-      # E-component of Faraday's Law not present due to 1V
-      FaradayE = None
-
-      # B-component of Ampère's Law not present due to 1V
-      AmpereB = None
-      
-      # E-component of Ampère's Law
-      AmpereE = sp.sparse.identity(dims.Ncells_total, dtype = np.float64, format = 'csr')
-
-      AmpereE.sum_duplicates()
-   else:
-      block_shape = (3*dims.Ncells_total,3*dims.Ncells_total)
-      
-      # B-component of Faraday's Law
-      FaradayB = sp.sparse.identity(3*dims.Ncells_total, dtype = np.float64, format = 'csr')
-      
-      # E-component of Faraday's Law
-      data,rows,cols = get_operator_coo_curl_node2face(dims)
-      FaradayE = sp.sparse.coo_array((data,(rows,cols)), shape = block_shape)*dims.dt*dims.theta
-      
-      # B-component of Ampère's Law
-      data,rows,cols = get_operator_coo_curl_face2node(dims)
-      AmpereB = -sp.sparse.coo_array((data,(rows,cols)), shape = block_shape)*dims.dt*dims.theta*const.c**2
-
-      # E-component of Ampère's Law
-      AmpereE = sp.sparse.identity(3*dims.Ncells_total, dtype = np.float64, format = 'csr')
-      
-      FaradayE.sum_duplicates()
-      AmpereB.sum_duplicates()
-      AmpereE.sum_duplicates()
-      
-      FaradayB = FaradayB.tocsr()
-      FaradayE = FaradayE.tocsr()
-      AmpereB = AmpereB.tocsr()
-      AmpereE = AmpereE.tocsr()
-      
-   P = sp.sparse.block_array([[FaradayB,FaradayE],[AmpereB,AmpereE]])
-   
-   P = P.tocsr()
-   
-   return P
 
 def test_interpolators(function = None):
    # Test interpolation methods
@@ -1379,18 +1323,29 @@ if __name__ == '__main__':
    tolerance_error = False
 
    if sparse:
-      P = build_P_coo()
-      M_x = lambda x: sp.sparse.linalg.spsolve(P, x)
+      curls = build_curl_coo()
    else:
-      P = build_P()
-      M_x = lambda x: sp.linalg.solve(P, x)
+      curls = build_curl()
+
+   if oneV:
+      block_shape = (dims.Ncells_total,dims.Ncells_total)
+   else:
+      block_shape = (3*dims.Ncells_total,3*dims.Ncells_total)
+   
+   if sparse:
+      no_mass = sp.sparse.csr_matrix(block_shape, dtype = np.float64)
+      P = build_A_coo(no_mass, curls)
+   else:
+      no_mass = np.zeros(block_shape, dtype = np.float64)
+      P = build_A(no_mass, curls)
+   M_x = lambda x: sp.sparse.linalg.spsolve(sp.sparse.csr_array(P), x)
    
    if dims.oneV:
       M_dim = (dims.Ncells_total,dims.Ncells_total)
    else:
       M_dim = (6*dims.Ncells_total,6*dims.Ncells_total)
    M = sp.sparse.linalg.LinearOperator(M_dim, M_x)
-
+   
    total_energy = []
 
    total_energy.append(getEnergy(fields, pops))
@@ -1530,9 +1485,9 @@ if __name__ == '__main__':
       timers.tic("build A")
       
       if sparse:
-         A = build_A_coo(mass_matrices_coo)
+         A = build_A_coo(mass_matrices_coo, curls)
       else:
-         A = build_A(mass_matrices)
+         A = build_A(mass_matrices, curls)
       
       timers.toc("build A")
       logger.info("   solving gmres")      

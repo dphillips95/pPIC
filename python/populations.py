@@ -90,7 +90,10 @@ class Pop:
 
       meanV_perp = (self.w*np.linalg.norm(self.v - (self.v@meanB)[:,np.newaxis]*unitB, axis = 1)).sum()/Nparts
 
-      gyro_r = meanV_perp/gyro_f
+      if gyro_f == 0:
+         gyro_r = np.inf
+      else:
+         gyro_r = meanV_perp/gyro_f
 
       inertial = const.c/omega_p
       
