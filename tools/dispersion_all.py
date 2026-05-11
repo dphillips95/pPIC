@@ -452,14 +452,16 @@ def plotter2(data, filename, titles, kLims, omegaLims, k, omega, dk, domega, whi
          ax[i].set_xlabel('Angular Wavenumber [rad km$^{-1}$]')
          if i == 0:
             ax[i].set_ylabel('Angular Frequency [rad Hz]')
-            
+      
       plt.gcf().gca().tick_params(which='both',direction=tickDir,length=tickLength,width=tickWidth)
       
       if whistlers is not None:
-         whistlerLine = ax[i].plot(whistlers[0,:], omega + v0*whistlers[0,:], color = 'k', linestyle = 'dashed', linewidth = 2)
-         cycloLine = ax[i].plot(whistlers[1,:], omega + v0*whistlers[1,:], color = 'k', linestyle = 'dashed', linewidth = 2)
-         ax[i].plot(-whistlers[0,:], omega - v0*whistlers[0,:], color = 'k', linestyle = 'dotted', linewidth = 2)
-         ax[i].plot(-whistlers[1,:], omega - v0*whistlers[1,:], color = 'k', linestyle = 'dotted', linewidth = 2)
+         with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            whistlerLine = ax[i].plot(whistlers[0,:], omega + v0*whistlers[0,:], color = 'k', linestyle = 'dashed', linewidth = 2)
+            cycloLine = ax[i].plot(whistlers[1,:], omega + v0*whistlers[1,:], color = 'k', linestyle = 'dashed', linewidth = 2)
+            ax[i].plot(-whistlers[0,:], omega - v0*whistlers[0,:], color = 'k', linestyle = 'dotted', linewidth = 2)
+            ax[i].plot(-whistlers[1,:], omega - v0*whistlers[1,:], color = 'k', linestyle = 'dotted', linewidth = 2)
          
       if args.Logarithmic:
          if args.Mirror == 0:
@@ -575,10 +577,12 @@ def plotter(data, filename, title, kLims, omegaLims, k, omega, dk, domega, whist
    plt.gcf().gca().tick_params(which='both',direction=tickDir,length=tickLength,width=tickWidth)
    
    if whistlers is not None:
-      ax.plot(whistlers[0,:], omega + v0*whistlers[0,:], color = 'g', linestyle = 'dotted', linewidth = 2)
-      ax.plot(whistlers[1,:], omega + v0*whistlers[1,:], color = 'b', linestyle = 'dotted', linewidth = 2)
-      ax.plot(-whistlers[0,:], omega - v0*whistlers[0,:], color = 'r', linestyle = 'dotted', linewidth = 2)
-      ax.plot(-whistlers[1,:], omega - v0*whistlers[1,:], color = 'k', linestyle = 'dotted', linewidth = 2)
+      with warnings.catch_warnings():
+         warnings.simplefilter("ignore")
+         ax.plot(whistlers[0,:], omega + v0*whistlers[0,:], color = 'g', linestyle = 'dotted', linewidth = 2)
+         ax.plot(whistlers[1,:], omega + v0*whistlers[1,:], color = 'b', linestyle = 'dotted', linewidth = 2)
+         ax.plot(-whistlers[0,:], omega - v0*whistlers[0,:], color = 'g', linestyle = 'dotted', linewidth = 2)
+         ax.plot(-whistlers[1,:], omega - v0*whistlers[1,:], color = 'b', linestyle = 'dotted', linewidth = 2)
    if args.Logarithmic:
       if args.Mirror == 0:
          plt.xscale('log')
@@ -650,7 +654,6 @@ def whistler(omega, right, hybrid, kmax):
    return whistler
 
 def getvA(B_dat, ne_dat, t_pt):
-   
    # B_dat2 = np.sum(B_dat**2, axis = -1)[t_pt,:]
    B_dat2 = B_dat[t_pt,:,0]**2
    ne_dat = ne_dat[t_pt,:]
@@ -685,7 +688,7 @@ def getParam(B_dat, ne_dat, n_dat, T_dat, Ue_dat = None):
    ne_av = np.average(ne_dat)
 
    av_tmp = np.average(n_dat*T_dat, axis = (0))
-
+   
    av_tmp = [x/y for x,y in zip(list(av_tmp.flat), list(ne_dat.flat)) if y > 0]
    
    T_av = np.average(av_tmp)
@@ -728,7 +731,6 @@ def getParam(B_dat, ne_dat, n_dat, T_dat, Ue_dat = None):
            inertial_ion, inertial_electron, lim_electron]
 
 def getv0(n_dat, v_dat, t_pt):
-   
    n_dat = np.array(n_dat)
    v_dat = np.array(v_dat)
    
@@ -963,25 +965,16 @@ v0 = getv0(n_dataset, v_dataset, nt-1)
 v0 = v0[0]
 
 if Ue_present:
-   [ion_gyro_freq, ion_gyro_radius, electron_gyro_freq,
+   (ion_gyro_freq, ion_gyro_radius, electron_gyro_freq,
     electron_gyro_radius, oscillation_ion, oscillation_electron,
-    inertial_ion, inertial_electron, lim_electron] = getParam(
+    inertial_ion, inertial_electron, lim_electron) = getParam(
        var_data[B_loc], var_data[ne_loc], n_dataset, T_dataset,
        var_data[Ue_loc])
 else:
-   [ion_gyro_freq, ion_gyro_radius, electron_gyro_freq,
+   (ion_gyro_freq, ion_gyro_radius, electron_gyro_freq,
     electron_gyro_radius, oscillation_ion, oscillation_electron,
-    inertial_ion, inertial_electron, lim_electron] = getParam(
+    inertial_ion, inertial_electron, lim_electron) = getParam(
        var_data[B_loc], var_data[ne_loc], n_dataset, T_dataset)
-#ion_gyro_freq = tmp[0]
-#ion_gyro_radius = tmp[1]
-#electron_gyro_freq = tmp[2]
-#electron_gyro_radius = tmp[3]
-#oscillation_ion = tmp[4]
-#oscillation_electron = tmp[5]
-#inertial_ion = tmp[6]
-#inertial_electron = tmp[7]
-#lim_electron = tmp[8]
 
 #for i in range(nt):
 # By[i] = By[i] - sum(By[i])/nx
