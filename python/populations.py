@@ -1,4 +1,26 @@
-# Module of Population class and population functions, e.g. accumulators, alpha, mass matrices etc.
+"""
+Population classes and functions for pPIC.
+
+Copyright 2026 Finnish Meteorological Institute.
+
+This program is free software: you can redistribute it
+and/or modify it under the terms of the GNU General Public
+License as published by the Free Software Foundation,
+either version 3 of the License, or (at your option) any
+later version.
+
+This program is distributed in the hope that it will be
+useful, but WITHOUT ANY WARRANTY; without even the implied
+warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
+PURPOSE. See the GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public
+License along with this program. If not, see
+<https://www.gnu.org/licenses/>.
+
+
+Author(s): David Phillips
+"""
 
 import math
 import functools as ftools
@@ -286,24 +308,20 @@ def calcCellData(pop, dims):
    
    if dims.oneV is True:
       np.add.at(cellU[:,:,:,0], (z_ind,y_ind,x_ind), v[0])
-      
-      np.add.at(cellN[:,:,:,0], (z_ind,y_ind,x_ind), 1)
    else:
       np.add.at(cellU, (z_ind,y_ind,x_ind), pop.v)
-      
-      np.add.at(cellN, (z_ind,y_ind,x_ind), 1)
+   
+   np.add.at(cellN, (z_ind,y_ind,x_ind), 1)
    
    cellU /= cellN[:,:,:,np.newaxis]
    cellN *= pop.w/dims.dV
    
    if dims.oneV is True:
-      v_0 = (v[0] - cellU[z_ind,y_ind,x_ind,0])**2
-      
-      np.add.at(cellT, (z_ind,y_ind,x_ind), v_0)
+      vth = (v[0] - cellU[z_ind,y_ind,x_ind,0])**2
    else:
       vth = np.sum((pop.v - cellU[z_ind,y_ind,x_ind])**2, axis = -1)/3
-
-      np.add.at(cellT, (z_ind,y_ind,x_ind), vth)
+   
+   np.add.at(cellT, (z_ind,y_ind,x_ind), vth)
    
    cellT *= pop.m/const.k
 

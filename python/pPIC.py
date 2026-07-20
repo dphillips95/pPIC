@@ -1,3 +1,27 @@
+"""
+Main source code for pPIC.
+
+Copyright 2026 Finnish Meteorological Institute.
+
+This program is free software: you can redistribute it
+and/or modify it under the terms of the GNU General Public
+License as published by the Free Software Foundation,
+either version 3 of the License, or (at your option) any
+later version.
+
+This program is distributed in the hope that it will be
+useful, but WITHOUT ANY WARRANTY; without even the implied
+warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
+PURPOSE. See the GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public
+License along with this program. If not, see
+<https://www.gnu.org/licenses/>.
+
+
+Author(s): David Phillips
+"""
+
 import sys
 import os
 import math
@@ -1341,7 +1365,7 @@ if __name__ == '__main__':
    M_x = lambda x: sp.sparse.linalg.spsolve(sp.sparse.csr_array(P), x)
    
    if dims.oneV:
-      M_dim = (dims.Ncells_total,dims.Ncells_total)
+      M_dim = (2*dims.Ncells_total,2*dims.Ncells_total)
    else:
       M_dim = (6*dims.Ncells_total,6*dims.Ncells_total)
    M = sp.sparse.linalg.LinearOperator(M_dim, M_x)
@@ -1382,10 +1406,10 @@ if __name__ == '__main__':
             timers.tic("mass matrices")
             if oneV:
                block_shape = (dims.Ncells_total,dims.Ncells_total)
+               mass_matrices_coo = sp.sparse.csr_array(block_shape, dtype = np.float64)
             else:
                block_shape = (3*dims.Ncells_total,3*dims.Ncells_total)
-
-            mass_matrices_coo = sp.sparse.bsr_array(block_shape, dtype = np.float64, blocksize = (3,3))
+               mass_matrices_coo = sp.sparse.bsr_array(block_shape, dtype = np.float64, blocksize = (3,3))
 
             nodeJ_hat = np.zeros(dims.dim_vector, dtype = np.float64)
             
@@ -1398,7 +1422,10 @@ if __name__ == '__main__':
                   
                   tmp = sp.sparse.coo_array((mm_tmp,(row,col)), shape = block_shape)
                   tmp.sum_duplicates()
-                  tmp = tmp.tobsr((3,3))
+                  if oneV:
+                     tmp = tmp.tocsr()
+                  else:
+                     tmp = tmp.tobsr((3,3))
                   mass_matrices_coo += tmp
 
             mass_matrices_coo.sum_duplicates()
@@ -1417,11 +1444,11 @@ if __name__ == '__main__':
             timers.tic("mass matrices")
             if oneV:
                block_shape = (dims.Ncells_total,dims.Ncells_total)
+               mass_matrices_coo = sp.sparse.csr_array(block_shape, dtype = np.float64)
             else:
                block_shape = (3*dims.Ncells_total,3*dims.Ncells_total)
-
-            mass_matrices_coo = sp.sparse.bsr_array(block_shape, dtype = np.float64, blocksize = (3,3))
-
+               mass_matrices_coo = sp.sparse.bsr_array(block_shape, dtype = np.float64, blocksize = (3,3))
+               
             for pop in pops.values():
                if pop.static is False:
                   # dat,row,col = compute_mass_matrices_coo(pop, dims)
@@ -1433,7 +1460,10 @@ if __name__ == '__main__':
                   
                   tmp = sp.sparse.coo_array((dat,(row,col)), shape = block_shape)
                   tmp.sum_duplicates()
-                  tmp = tmp.tobsr((3,3))
+                  if oneV:
+                     tmp = tmp.tocsr()
+                  else:
+                     tmp = tmp.tobsr((3,3))
                   mass_matrices_coo += tmp
 
             mass_matrices_coo.sum_duplicates()
