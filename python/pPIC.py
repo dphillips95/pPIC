@@ -67,6 +67,8 @@ parser.add_argument("--rtol", type = float,
                     help = "gmres relative tolerance, norm(b - A @ x) <= rtol*norm(b)")
 parser.add_argument("--atol", type = float,
                     help = "gmres absolute tolerance, norm(b - A @ x) <= atol")
+parser.add_argument("-c-ratio", type = float, default = 1,
+                    help = "Speed of light fraction of physical speed")
 parser.add_argument("--seed", type = int, help = "Rng seed")
 parser.add_argument("-o", "--out-dir", type = str, default = "./",
                     help = "Output data directory path")
@@ -259,7 +261,14 @@ def readConfig(fName, args):
                                         fallback = const.m_p/const.m_e)
    except TypeError:
       args.mass_ratio = const.m_p/const.m_e
-   
+
+   try:
+      args.c_ratio = config.getfloat("simulation", "c-ratio", vars = args_dict,
+                               fallback = 1)
+   except TypeError:
+      args.c_ratio = 1
+   args.c_ratio *= const.c
+      
    args.dt = config.get("simulation", "dt", vars = args_dict)
    if args.dt is not None:
       args.dt = float(args.dt)
@@ -355,12 +364,13 @@ Dims_spec = [
    ("time", float64),
    ("timestep", int64),
    ("theta", float64),
-   ("phi", float64)
+   ("phi", float64),
+   ("c", float64)
 ]
 
 @jitclass(Dims_spec)
 class Dims:
-   def __init__(self, lims, dt, theta, phi, sizes, period, linear, oneV, time = 0.0, timestep = 0):
+   def __init__(self, lims, dt, theta, phi, sizes, period, linear, oneV, time = 0.0, timestep = 0, c = const.c):
       # Pseudo-dict containg dimension params
       (self.x_min,self.x_max),(self.y_min,self.y_max),(self.z_min,self.z_max) = lims
       self.x_size,self.y_size,self.z_size = sizes
@@ -372,7 +382,7 @@ class Dims:
       
       self.dim_scalar = np.array([self.z_size,self.y_size,self.x_size], dtype = int64)
       self.dim_vector = np.array([self.z_size,self.y_size,self.x_size,3], dtype = int64)
-
+      
       self.dt = dt
       self.theta = theta
       self.phi = phi
@@ -402,6 +412,7 @@ class Dims:
       self.oneV = oneV
       self.time = time
       self.timestep = timestep
+      self.c = c
       
    def copy(self):
       # Copy dims via reconstruction - returns inputs to Dims() as tuple
@@ -417,8 +428,9 @@ class Dims:
       oneV = self.oneV
       time = self.time
       timestep = self.timestep
+      c = self.c
 
-      return lims,dt,theta,phi,sizes,period,linear,oneV,time,timestep
+      return lims,dt,theta,phi,sizes,period,linear,oneV,time,timestep,c
 
    def step_time(self):
       # Increment time and timestep
@@ -456,6 +468,14 @@ def initialise_populations():
 
          density = config.getfloat(pop_name, "density", fallback = 0.0)
          macros = config.getint(pop_name, "macroparticles_per_cell", fallback = 1)
+
+         xmin = config.get(pop_name, "xmin", fallback = None)
+         xmax = config.get(pop_name, "xmax", fallback = None)
+
+         if xmin is not None:
+            xmin = float(xmin)
+         if xmax is not None:
+            xmax = float(xmax)
          
          weight = density*dims.dV/macros
 
@@ -468,7 +488,7 @@ def initialise_populations():
 
          static = config.getboolean(pop_name, "static", fallback = False)
          
-         pops[pop_name] = Pop(pop_name, charge, mass, weight, electron, macros, rng, dims, temp, velocity, static)
+         pops[pop_name] = Pop(pop_name, charge, mass, weight, electron, macros, rng, dims, temp, velocity, static, xmin, xmax)
       # pops_njit[pop_name] = Pop_njit(charge, mass, weight, electron, macros, rng, dims, temp, velocity)
 
 def build_b(faceB, nodeE, nodeJ_hat, mass_matrices):
@@ -501,7 +521,7 @@ def build_b(faceB, nodeE, nodeJ_hat, mass_matrices):
       # Constant term of Ampère's Law
       b[3*dims.Ncells_total:] += nodeE.flat
       b[3*dims.Ncells_total:] -= dims.dt*J_star/const.epsilon_0
-      b[3*dims.Ncells_total:] += (curl_face2node(faceB, dims)*const.c**2*dims.dt*(1-dims.theta)).flat
+      b[3*dims.Ncells_total:] += (curl_face2node(faceB, dims)*dims.c**2*dims.dt*(1-dims.theta)).flat
    
    return b
 
@@ -535,7 +555,7 @@ def build_A(mass_matrices, curls):
       A[:3*dims.Ncells_total,3*dims.Ncells_total:] = curl_n2f*dims.dt*dims.theta
 
       # B-component of Ampère's Law
-      A[3*dims.Ncells_total:,:3*dims.Ncells_total] = -curl_f2n*dims.dt*dims.theta*const.c**2
+      A[3*dims.Ncells_total:,:3*dims.Ncells_total] = -curl_f2n*dims.dt*dims.theta*dims.c**2
 
       # E-component of Ampère's Law
       A[3*dims.Ncells_total:,3*dims.Ncells_total:] = np.identity(3*dims.Ncells_total)
@@ -586,7 +606,7 @@ def build_A_coo(mass_matrices, curls):
       FaradayE = curl_n2f*dims.dt*dims.theta
       
       # B-component of Ampère's Law
-      AmpereB = -curl_f2n*dims.dt*dims.theta*const.c**2
+      AmpereB = -curl_f2n*dims.dt*dims.theta*dims.c**2
 
       # E-component of Ampère's Law
       AmpereE = sp.sparse.identity(3*dims.Ncells_total, dtype = np.float64, format = 'csr')
@@ -1047,8 +1067,8 @@ def cap_dt(pops, maxB):
    
    dt_pf = 1/plasma_freq if plasma_freq > 0 else np.inf
    dt_eg = 1/electron_gyro if electron_gyro > 0 else np.inf
-   dt_part = dims.dx/maxV*dt_cap
-   dt_yee = 0.9999 * min([dims.dx,dims.dy,dims.dz])/const.c
+   dt_part = dims.dx/maxV*dt_cap if maxV > 0 else np.inf
+   dt_yee = 0.9999 * min([dims.dx,dims.dy,dims.dz])/dims.c
    
    if args.dt > dt_part:
       if args.unsafe:
@@ -1066,7 +1086,7 @@ def cap_dt(pops, maxB):
    logger.info("dt*omega_ce = " + str(dims.dt*electron_gyro))
    logger.info("dt/dt_yee = " + str(dims.dt/dt_yee))
 
-   inertial_electron = const.c/plasma_freq
+   inertial_electron = dims.c*dt_pf
    
    logger.newline()
    logger.info("Plasma parameters")
@@ -1230,7 +1250,7 @@ lims = ((x_min,x_max),(y_min,y_max),(z_min,z_max))
 sizes = (x_size,y_size,z_size)
 period = (z_periodic, y_periodic, x_periodic, True)
 
-dims = Dims(lims, dt, theta, phi, sizes, period, not config.getboolean("main", "use_nonlinear_r_interpolation", fallback = False), oneV)
+dims = Dims(lims, dt, theta, phi, sizes, period, not config.getboolean("main", "use_nonlinear_r_interpolation", fallback = False), oneV, c = args.c_ratio)
 
 save_steps = config.getint("simulation", "save_steps", fallback = 1)
 

@@ -49,7 +49,7 @@ class Pop:
    # nodeU:    population node bulk velocity
    # nodeN:    population node number density
    # static:   if True then population positions and velocities will not be updated, and impact on fields is ignored
-   def __init__(self, name, q, m, w, electron, Np, rng, dims, T = 0, v = 0, static = False):
+   def __init__(self, name, q, m, w, electron, Np, rng, dims, T = 0, v = 0, static = False, xmin = None, xmax = None):
       # Initial fill of particle population
       # If Np = 0 skips particle creation
 
@@ -74,7 +74,7 @@ class Pop:
       
       if Np > 0:
          vth = math.sqrt(const.k*T/self.m)
-         uniform_injector(self, Np, vth, v, rng, dims)
+         uniform_injector(self, Np, vth, v, rng, dims, xmin, xmax)
       
       accumulators(self, dims)
       self.cellN,self.cellU,self.cellT = calcCellData(self, dims)
@@ -105,7 +105,7 @@ class Pop:
       else:
          unitB = meanB/np.linalg.norm(meanB)
       
-      omega_p = math.sqrt(dens*self.q**2/(self.m*const.epsilon_0))
+      omega_p = math.sqrt(dens*self.q**2/(self.m/(dims.c**2*const.mu_0)))
       gyro_f = self.q*meanB_mag/self.m
       
       meanV = (self.w*self.v).sum(axis = 0)/Nparts
@@ -127,24 +127,42 @@ class Pop:
 
       return dens,gyro_f,gyro_r,inertial,meanV,vth,temp
       
-def uniform_injector(pop, Np, vth, v, rng, dims):
+def uniform_injector(pop, Np, vth, v, rng, dims, xmin = None, xmax = None):
    # Inject Np particles between xmin and xmax, bulk velocity v, and thermal velocity vth
    
-   r_ins = np.empty((Np*dims.Ncells_total,3), dtype = np.float64)
-   v_ins = np.zeros((Np*dims.Ncells_total,3), dtype = np.float64)
-   cid_ins = np.empty((Np*dims.Ncells_total), dtype = np.float64)
-
-   ID = np.fromiter(range(Np*dims.Ncells_total), dtype = np.int64)
+   if xmin is None:
+      xmin = dims.x_min
+   else:
+      xmin = (xmin - 0.5)*(dims.x_max - dims.x_min) + (dims.x_min + dims.x_max)/2
+   if xmax is None:
+      xmax = dims.x_max
+   else:
+      xmax = (xmax - 0.5)*(dims.x_max - dims.x_min) + (dims.x_min + dims.x_max)/2
    
-   for ii in range(dims.Ncells_total):
-      zi,yi,xi = np.unravel_index(ii, dims.dim_scalar)
+   x_locs = dims.x_locs[dims.x_locs > xmin]
+   x_locs = x_locs[x_locs <= xmax]
 
-      cell_x_min = dims.x_min + xi*dims.dx
-      cell_x_max = dims.x_max - (dims.x_size - 1 - xi)*dims.dx
-      cell_y_min = dims.y_min + yi*dims.dy
-      cell_y_max = dims.y_max - (dims.y_size - 1 - yi)*dims.dy
-      cell_z_min = dims.z_min + zi*dims.dz
-      cell_z_max = dims.z_max - (dims.z_size - 1 - zi)*dims.dz
+   min_xi = list(dims.x_locs).index(x_locs[0])
+   
+   Ncells_total = x_locs.size*dims.dim_scalar[0]*dims.dim_scalar[1]
+      
+   r_ins = np.empty((Np*Ncells_total,3), dtype = np.float64)
+   v_ins = np.zeros((Np*Ncells_total,3), dtype = np.float64)
+   cid_ins = np.empty((Np*Ncells_total), dtype = np.float64)
+
+   ID = np.fromiter(range(Np*Ncells_total), dtype = np.int64)
+   
+   for ii in range(Ncells_total):
+      zi,yi,xi = np.unravel_index(ii, dims.dim_scalar)
+      
+      xi += min_xi
+      
+      cell_x_min = (dims.x_min + dims.x_max)/2 + (xi - 0.5*dims.x_size)*dims.dx
+      cell_x_max = (dims.x_min + dims.x_max)/2 + (xi + 1 - 0.5*dims.x_size)*dims.dx
+      cell_y_min = (dims.y_min + dims.y_max)/2 + (yi - 0.5*dims.y_size)*dims.dy
+      cell_y_max = (dims.y_min + dims.y_max)/2 + (yi + 1 - 0.5*dims.y_size)*dims.dy
+      cell_z_min = (dims.z_min + dims.z_max)/2 + (zi - 0.5*dims.z_size)*dims.dz
+      cell_z_max = (dims.z_min + dims.z_max)/2 + (zi + 1 - 0.5*dims.z_size)*dims.dz
 
       r_ins[ii*Np:(ii+1)*Np,0] = rng.uniform(cell_x_min,cell_x_max, Np)
       if dims.oneV is True:
@@ -778,9 +796,18 @@ class Pop_njit:
       self.cellRhoQ,self.cellJi = accumulators_njit(self.r, self.v, self.q, self.w, dims)
 
 @njit(cache = True, fastmath = True)
-def uniform_injector_njit(Np, vth, bulk_v, rng, dims):
+def uniform_injector_njit(Np, vth, bulk_v, rng, dims, xmin = None, xmax = None):
    # Inject Np particles between xmin and xmax, bulk velocity bulk_v, and thermal velocity vth
 
+   if xmin is None:
+      xmin = dims.x_min
+   else:
+      xmin = (xmin - 0.5)*(dims.x_max - dims.x_min) + (dims.x_min + dims.x_max)/2
+   if xmax is None:
+      xmax = dims.x_max
+   else:
+      xmax = (xmax - 0.5)*(dims.x_max - dims.x_min) + (dims.x_min + dims.x_max)/2
+   
    r = np.zeros((Np*dims.Ncells_total,3), dtype = float64)
    v = np.zeros((Np*dims.Ncells_total,3), dtype = float64)
 
@@ -793,6 +820,9 @@ def uniform_injector_njit(Np, vth, bulk_v, rng, dims):
       cell_y_max = dims.y_max - (dims.y_size - 1 - yi)*dims.dy
       cell_z_min = dims.z_min + zi*dims.dz
       cell_z_max = dims.z_max - (dims.z_size - 1 - zi)*dims.dz
+
+      if cell_x_min < xmin or cell_x_min > xmax:
+         continue
       
       r[ii*Np:(ii+1)*Np,0] = rng.uniform(cell_x_min,cell_x_max, Np)
       if dims.oneV is True:

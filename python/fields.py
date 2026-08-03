@@ -74,6 +74,44 @@ class Fields:
             Bz = rng.uniform(-Bz_min, Bz_max, dims.dim_scalar)
             
             self.faceB += np.stack((Bx,By,Bz), axis = -1)
+         elif B_type == "disc":
+            inj_Bx_l = config.getfloat("magnetic_field", "Bx_l")
+            inj_Bx_r = config.getfloat("magnetic_field", "Bx_r")
+            inj_By_l = config.getfloat("magnetic_field", "By_l")
+            inj_By_r = config.getfloat("magnetic_field", "By_r")
+            inj_Bz_l = config.getfloat("magnetic_field", "Bz_l")
+            inj_Bz_r = config.getfloat("magnetic_field", "Bz_r")
+
+            disc = config.getfloat("magnetic_field", "disc")
+
+            if dims.oneV is True:
+               By_min = By_max = Bz_min = Bz_max = 0
+
+            if dims.dy == 1 and dims.dz == 1:
+               Bx_min = (Bx_min + Bx_max)/2
+               Bx_max = Bx_min
+
+            disc_i = int(disc*dims.x_size)
+
+            dim_scalar_l = np.array([dims.z_size,dims.y_size,disc_i], dtype = np.int64)
+            dim_scalar_r = np.array([dims.z_size,dims.y_size,dims.x_size - disc_i], dtype = np.int64)
+            
+            Bx_l = np.empty(dim_scalar_l, np.float64)
+            Bx_r = np.empty(dim_scalar_r, np.float64)
+            By_l = np.empty(dim_scalar_l, np.float64)
+            By_r = np.empty(dim_scalar_r, np.float64)
+            Bz_l = np.empty(dim_scalar_l, np.float64)
+            Bz_r = np.empty(dim_scalar_r, np.float64)
+
+            Bx_l.fill(inj_Bx_l)
+            Bx_r.fill(inj_Bx_r)
+            By_l.fill(inj_By_l)
+            By_r.fill(inj_By_r)
+            Bz_l.fill(inj_Bz_l)
+            Bz_r.fill(inj_Bz_r)
+            
+            self.faceB[:,:,:disc_i] += np.stack((Bx_l,By_l,Bz_l), axis = -1)
+            self.faceB[:,:,disc_i:] += np.stack((Bx_r,By_r,Bz_r), axis = -1)
       
       apply_boundaries_fields(self.faceB, dims)
       

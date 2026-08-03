@@ -25,7 +25,6 @@ Author(s): David Phillips
 import math
 import numpy as np
 import functools as ftools
-import scipy.constants as const
 from numba import njit
 # from numba import int64,float64
 from numpy import int64,float64

@@ -181,7 +181,7 @@ def calcDiagnostics(fields, pops, dims):
    logs["maxNodeE_mag"] = np.linalg.norm(fields.nodeE, axis = -1).max()
 
    logs["energy_B"] = np.sum(dims.dV*fields.faceB**2/(2*const.mu_0))
-   logs["energy_E"] = np.sum(dims.dV*fields.nodeE**2*const.epsilon_0/2)
+   logs["energy_E"] = np.sum(dims.dV*fields.nodeE**2/(2*dims.c**2*const.mu_0))
 
    logs["total_energy"] = logs["energy_B"] + logs["energy_E"]
 
